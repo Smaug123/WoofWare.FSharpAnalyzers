@@ -47,7 +47,9 @@ dotnet test
 # Use the NUnit test runner to execute specific test cases from Tests.fs
 
 # Update snapshot files (regenerate .expected files)
-# Run the [<Explicit>] test "Update snapshot" from Tests.fs for specific test cases
+# The test is marked [<Explicit>] but can be run via command line using a filter
+# Note: The NUnit runner has issues with filters containing spaces, so use a substring match
+dotnet test --filter "Name~Update" --configuration Release
 ```
 
 ## Architecture
@@ -84,9 +86,12 @@ Tests use a reflection-based discovery system:
 
 1. Create a new `.fs` file in the `WoofWare.FSharpAnalyzers` project
 2. Define a module with `cliAnalyzer` and `editorAnalyzer` functions; you can use the existing `BlockingAnalyzer.fs` for inspiration
-3. Add test cases in `WoofWare.FSharpAnalyzers.Test/Data/{AnalyzerName}/positive/` and `negative/`
-4. Tests are automatically discovered - no manual registration needed
-5. Run the "Update snapshot" test to populate `.expected` files for positive test cases (you need to ensure yourself that the `.expected` files exist at all though)
+3. Add the new analyzer to the `WoofWare.FSharpAnalyzers.fsproj` file
+4. Add test cases in `WoofWare.FSharpAnalyzers.Test/Data/{AnalyzerName}/positive/` and `negative/` directories (note: `{AnalyzerName}` must match the F# module name exactly)
+5. Tests are automatically discovered - no manual registration needed
+6. Run Fantomas with `nix run .#fantomas -- .`. It's important to do this before generating the snapshot files, because those files contain references to source code which may change on formatting
+7. Run the "Update snapshot" test to populate `.expected` files for positive test cases (you need to ensure yourself that the `.expected` files exist at all though)
+8. Add a description of the new analyzer to the README.md file, including its rationale
 
 ### Version Management
 
