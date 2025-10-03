@@ -1,0 +1,13 @@
+{
+  "version": "0.1",
+  "publicReleaseRefSpec": [
+    "^refs/heads/main$"
+  ],
+  "pathFilters": [
+    ":/WoofWare.FSharpAnalyzers/",
+    ":/global.json",
+    ":/README.md",
+    ":/logo.png",
+    ":/Directory.Build.props"
+  ]
+}
