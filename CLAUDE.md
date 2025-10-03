@@ -89,9 +89,9 @@ Tests use a reflection-based discovery system:
 3. Add the new analyzer to the `WoofWare.FSharpAnalyzers.fsproj` file
 4. Add test cases in `WoofWare.FSharpAnalyzers.Test/Data/{AnalyzerName}/positive/` and `negative/` directories (note: `{AnalyzerName}` must match the F# module name exactly)
 5. Tests are automatically discovered - no manual registration needed
-6. Run the "Update snapshot" test to populate `.expected` files for positive test cases (you need to ensure yourself that the `.expected` files exist at all though)
-7. Add a description of the new analyzer to the README.md file, including its rationale
-8. Run Fantomas with `nix run .#fantomas -- .`.
+6. Run Fantomas with `nix run .#fantomas -- .`. It's important to do this before generating the snapshot files, because those files contain references to source code which may change on formatting
+7. Run the "Update snapshot" test to populate `.expected` files for positive test cases (you need to ensure yourself that the `.expected` files exist at all though)
+8. Add a description of the new analyzer to the README.md file, including its rationale
 
 ### Version Management
 
