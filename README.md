@@ -18,6 +18,30 @@ You will have to have a blocking call in your main method; use the magic suppres
 
 Prevent [sync-over-async](https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming#async-all-the-way).
 
+## ReferenceEqualsAnalyzer
+
+Bans the use of `Object.ReferenceEquals`.
+
+Use the magic suppression string `ANALYZER: ReferenceEquals allowed`
+(optionally with a rationale appended) on the preceding line to suppress the analyzer on that line.
+
+### Rationale
+
+`Object.ReferenceEquals` has two significant problems:
+
+1. It silently does the wrong thing on value types. When you pass value types to `Object.ReferenceEquals`, they get boxed, and the function compares the boxed instances rather than the original values. This means `Object.ReferenceEquals(42, 42)` will always return `false`, which is rarely what you want.
+
+2. It lacks type safety. The function accepts any two objects, making it too easy to accidentally compare objects of completely different types (e.g., `Object.ReferenceEquals("hello", 42)`), which will always return `false` but compiles without warning.
+
+Instead, use a type-safe wrapper that enforces reference type constraints and type consistency:
+
+```fsharp
+let referenceEquals<'a when 'a : not struct> (x : 'a) (y : 'a) : bool =
+    obj.ReferenceEquals(x, y)
+```
+
+This prevents both issues: the `not struct` constraint prevents value types from being passed, and the type parameter `'a` ensures both arguments are the same type.
+
 # Licence
 
 WoofWare.FSharpAnalyzers is licensed to you under the MIT licence, a copy of which can be found at [LICENCE.md](./LICENSE.md).

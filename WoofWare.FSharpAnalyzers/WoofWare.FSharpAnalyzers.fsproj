@@ -23,6 +23,7 @@
   <ItemGroup>
     <Compile Include="DeactivateComment.fs" />
     <Compile Include="BlockingAnalyzer.fs" />
+    <Compile Include="ReferenceEqualsAnalyzer.fs" />
     <None Include="..\README.md">
       <Pack>True</Pack>
       <PackagePath>\</PackagePath>
