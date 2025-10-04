@@ -3,7 +3,7 @@ module TaskCompletionSourceSuppressed
 open System.Threading.Tasks
 
 let createTcsSuppressed () =
-    // ANALYZER: TaskCompletionSource without RunContinuationsAsynchronously allowed
+    // ANALYZER: RunContinuationsAsynchronously explicitly skipped here
     let tcs = TaskCompletionSource<int> ()
     tcs.SetResult 42
     tcs.Task
