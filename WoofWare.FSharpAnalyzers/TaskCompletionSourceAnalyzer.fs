@@ -33,7 +33,16 @@ module TaskCompletionSourceAnalyzer =
     let containsRunContinuationsAsync (sourceText : ISourceText) (e : FSharpExpr) : bool =
         let rec check (expr : FSharpExpr) =
             match expr with
-            | Const _ ->
+            | Value x ->
+                // we can't look into variables in all cases, so just assume the user knows what they're doing
+                match x.SignatureLocation with
+                | Some signature ->
+                    let subString = sourceText.GetSubTextFromRange signature
+
+                    not (subString.Contains "TaskCreationOptions.")
+                    || subString.Contains "RunContinuationsAsynchronously"
+                | None -> true
+            | _ ->
                 // Check the source text at this expression's range
                 let range = expr.Range
 
@@ -63,7 +72,6 @@ module TaskCompletionSourceAnalyzer =
                     true
                 else
                     expr.ImmediateSubExpressions |> Seq.exists check
-            | _ -> true
 
         check e
 

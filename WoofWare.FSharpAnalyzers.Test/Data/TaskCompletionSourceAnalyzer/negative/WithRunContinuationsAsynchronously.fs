@@ -16,17 +16,10 @@ let createTcsWithStateAndOptions () =
     tcs.SetResult "hello"
     tcs.Task
 
-let createTcsWithMultipleOptions () =
-    let options =
-        TaskCreationOptions.RunContinuationsAsynchronously
-        ||| TaskCreationOptions.DenyChildAttach
+let createTcsWithVar () =
+    // we don't attempt to look into the contents of variables
+    let options = TaskCreationOptions.None
 
-    let tcs = TaskCompletionSource<int> (options)
+    let tcs = TaskCompletionSource<int> options
     tcs.SetResult 1
-    tcs.Task
-
-let createTcsWithAllCorrectOptions () =
-    let options = TaskCreationOptions.RunContinuationsAsynchronously
-    let tcs = TaskCompletionSource<bool> ("state", options)
-    tcs.SetResult true
     tcs.Task
