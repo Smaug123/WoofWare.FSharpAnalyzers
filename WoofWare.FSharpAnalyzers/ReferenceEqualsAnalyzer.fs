@@ -47,7 +47,7 @@ module ReferenceEqualsAnalyzer =
                     + "It silently does the wrong thing on value types, and lacks type safety - "
                     + "it's too easy to accidentally compare objects of different types. "
                     + "Use a type-safe wrapper like 'let referenceEquals<'a when 'a : not struct> (x : 'a) (y : 'a) : bool = ...' instead. "
-                    + "Suppress with comment including text 'ReferenceEquals allowed'."
+                    + $"Suppress with comment including text '%s{SwitchOffComment}'."
                 Code = Code
                 Severity = Severity.Warning
                 Range = range

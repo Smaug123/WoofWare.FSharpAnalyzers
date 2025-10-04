@@ -15,8 +15,7 @@ module TaskCompletionSourceAnalyzer =
     let Code = "WOOF-TCS-ASYNC"
 
     [<Literal>]
-    let SwitchOffComment =
-        "ANALYZER: TaskCompletionSource without RunContinuationsAsynchronously allowed"
+    let SwitchOffComment = "ANALYZER: RunContinuationsAsynchronously"
 
     let tryGetFullName (e : FSharpExpr) =
         if e.Type.ErasedType.HasTypeDefinition then
@@ -131,7 +130,7 @@ module TaskCompletionSourceAnalyzer =
                     + "This can cause continuations to run inline on the calling thread, leading to deadlocks, "
                     + "thread-pool starvation, and corruption of state. "
                     + "Always use: new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously). "
-                    + "Suppress with comment including text 'TaskCompletionSource without RunContinuationsAsynchronously allowed'."
+                    + $"Suppress with comment including text '%s{SwitchOffComment}'."
                 Code = Code
                 Severity = Severity.Warning
                 Range = range

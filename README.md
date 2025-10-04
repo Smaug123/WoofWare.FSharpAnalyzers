@@ -42,6 +42,29 @@ let referenceEquals<'a when 'a : not struct> (x : 'a) (y : 'a) : bool =
 
 This prevents both issues: the `not struct` constraint prevents value types from being passed, and the type parameter `'a` ensures both arguments are the same type.
 
+## TaskCompletionSourceAnalyzer
+
+Requires `TaskCompletionSource<T>` to be created with `TaskCreationOptions.RunContinuationsAsynchronously`.
+
+Use the magic suppression string `ANALYZER: RunContinuationsAsynchronously`
+(optionally with a rationale appended) on the preceding line to suppress the analyzer on that line.
+
+### Rationale
+
+By default, when you call `SetResult`, `SetException`, or `SetCanceled` on a `TaskCompletionSource<T>`, any continuations attached to the resulting task will run **synchronously on the thread that completes the task**. This can lead to serious problems:
+
+1. **Deadlocks**: If the continuation tries to acquire a lock or synchronization context that the calling thread holds, you get a deadlock.
+
+2. **Thread-pool starvation**: Continuations may perform long-running work, blocking the thread that called `SetResult` and preventing it from doing other work.
+
+3. **State corruption**: The continuation runs with the calling thread's execution context, which may have unexpected side effects like running on a UI thread or within a specific synchronization context.
+
+Always create `TaskCompletionSource<T>` with `TaskCreationOptions.RunContinuationsAsynchronously` to ensure continuations are scheduled asynchronously on the thread pool:
+
+```fsharp
+let tcs = TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously)
+```
+
 # Licence
 
 WoofWare.FSharpAnalyzers is licensed to you under the MIT licence, a copy of which can be found at [LICENCE.md](./LICENSE.md).
