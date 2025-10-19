@@ -3,31 +3,36 @@
 open System
 open System.IO
 open System.Reflection
+open System.Runtime.ExceptionServices
 open NUnit.Framework
+open FsUnitTyped
 open FSharp.Analyzers.SDK
 open FSharp.Analyzers.SDK.Testing
 open WoofWare.Expect
 
 type TestData =
     {
-        AnalyzerFn : Analyzer<CliContext>
         AnalyzerName : string
         FileName : string
         FileNameOfExpected : string option
     }
+
+    static member ModuleNameSuffix = "Analyzer"
+
+    member this.AnalyzerModuleName = this.AnalyzerName + TestData.ModuleNameSuffix
 
     override this.ToString () =
         $"%s{this.AnalyzerName} - %s{this.FileName}"
 
     member this.ResourceName =
         match this.FileNameOfExpected with
-        | None -> $"Data.%s{this.AnalyzerName}.negative.%s{this.FileName}"
-        | Some _ -> $"Data.%s{this.AnalyzerName}.positive.%s{this.FileName}"
+        | None -> $"Data.%s{this.AnalyzerModuleName}.negative.%s{this.FileName}"
+        | Some _ -> $"Data.%s{this.AnalyzerModuleName}.positive.%s{this.FileName}"
 
     member this.ResourceNameOfExpected =
         match this.FileNameOfExpected with
         | None -> None
-        | Some n -> Some $"Data.%s{this.AnalyzerName}.positive.%s{n}"
+        | Some n -> Some $"Data.%s{this.AnalyzerModuleName}.positive.%s{n}"
 
 [<TestFixture>]
 [<Parallelizable(ParallelScope.All)>]
@@ -74,17 +79,11 @@ module Tests =
         |> Array.collect (fun (analyzerName, values) ->
             let values = values |> Array.map snd
 
-            let mod' =
-                match analyzersAssy.GetType $"WoofWare.FSharpAnalyzers.%s{analyzerName}" with
-                | null -> failwith $"could not find analyzer %s{analyzerName}"
-                | o -> o
-
-            let analyzerFn =
-                match mod'.GetMethod "cliAnalyzer" with
-                | null -> failwith $"could not find cliAnalyzer on %s{analyzerName}"
-                | o ->
-                    let del = o.CreateDelegate<Func<CliContext, Async<Message list>>> ()
-                    del.Invoke
+            let analyzerName =
+                if analyzerName.EndsWith (TestData.ModuleNameSuffix, StringComparison.Ordinal) then
+                    analyzerName.Substring (0, analyzerName.Length - TestData.ModuleNameSuffix.Length)
+                else
+                    failwith "module didn't match convention: expected the form '`AnalyzerName`Analyzer'"
 
             values
             |> Array.map (fun v ->
@@ -99,14 +98,12 @@ module Tests =
                 | "negative" ->
                     {
                         AnalyzerName = analyzerName
-                        AnalyzerFn = analyzerFn
                         FileName = afterFirstDot
                         FileNameOfExpected = None
                     }
                 | "positive" ->
                     {
                         AnalyzerName = analyzerName
-                        AnalyzerFn = analyzerFn
                         FileName = afterFirstDot
                         FileNameOfExpected = Some $"%s{afterFirstDot}.expected"
                     }
@@ -123,11 +120,37 @@ module Tests =
         |> Array.filter (fun s -> s.FileNameOfExpected.IsSome)
         |> Array.map TestCaseData
 
+    let makeClient (analyzerName : string) =
+        let client = Client<CliAnalyzerAttribute, _> ()
+
+        let stats =
+            client.LoadAnalyzers (
+                DirectoryInfo(analyzersAssy.Location).Parent.FullName,
+                ExcludeInclude.IncludeFilter (fun s -> s = analyzerName)
+            )
+
+        stats.FailedAssemblies |> shouldEqual 0
+        stats.AnalyzerAssemblies |> shouldBeGreaterThan 0
+        client
+
+    let getMessages (results : AnalysisResult list) : Message list =
+
+        results
+        |> List.collect (fun res ->
+            match res.Output with
+            | Error e ->
+                let edi = ExceptionDispatchInfo.Capture e
+                edi.Throw ()
+                failwith "unreachable"
+            | Ok message -> message
+        )
+
     [<TestCaseSource(nameof tests)>]
     let ``Run tests`` (testCase : TestData) =
         task {
             let! options = ProjectOptions.get.Force ()
             let file = Assembly.readEmbeddedResource testCase.ResourceName
+            let client = makeClient testCase.AnalyzerName
 
             let expected =
                 testCase.ResourceNameOfExpected
@@ -136,7 +159,9 @@ module Tests =
                     contents.TrimEnd('\n').Split '\n'
                 )
 
-            let! messagesFromCli = file |> getContext options |> testCase.AnalyzerFn
+            let ctx = file |> getContext options
+            let! result = client.RunAnalyzersSafely ctx
+            let messagesFromCli = getMessages result
 
             match expected with
             | Some expected -> assertExpected testCase.FileName expected messagesFromCli
@@ -168,8 +193,11 @@ module Tests =
         task {
             let! options = ProjectOptions.get.Force ()
             let file = Assembly.readEmbeddedResource testCase.ResourceName
+            let client = makeClient testCase.AnalyzerName
 
-            let! messagesFromCli = file |> getContext options |> testCase.AnalyzerFn
+            let ctx = file |> getContext options
+            let! result = client.RunAnalyzersSafely ctx
+            let messagesFromCli = getMessages result
 
             let fsProjFile = fsProjFile.Force ()
 
@@ -177,7 +205,7 @@ module Tests =
                 Path.Combine (
                     fsProjFile.Directory.FullName,
                     "Data",
-                    testCase.AnalyzerName,
+                    testCase.AnalyzerModuleName,
                     "positive",
                     testCase.FileName + ".expected"
                 )

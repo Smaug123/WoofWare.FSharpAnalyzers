@@ -9,13 +9,10 @@ open FSharp.Compiler.SyntaxTrivia
 open FSharp.Compiler.Text
 
 [<RequireQualifiedAccess>]
-module BlockingAnalyzer =
+module BlockingCallsAnalyzer =
 
     [<Literal>]
     let Code = "WOOF-BLOCKING"
-
-    [<Literal>]
-    let SwitchOffComment = "ANALYZER: synchronous blocking call allowed"
 
     let problematicMethods =
         [
@@ -52,29 +49,27 @@ module BlockingAnalyzer =
 
                     // Check for regular method calls
                     if problematicMethods.Contains mfv.FullName then
-                        if Deactivated.comment SwitchOffComment comments sourceText m |> Option.isNone then
-                            let methodName =
-                                if mfv.DisplayName.Contains '.' then
-                                    mfv.DisplayName
-                                elif mfv.FullName = "Microsoft.FSharp.Control.RunSynchronously" then
-                                    // Special handling for Async.RunSynchronously, which has a different name in the TAST
-                                    "Async.RunSynchronously"
+                        let methodName =
+                            if mfv.DisplayName.Contains '.' then
+                                mfv.DisplayName
+                            elif mfv.FullName = "Microsoft.FSharp.Control.RunSynchronously" then
+                                // Special handling for Async.RunSynchronously, which has a different name in the TAST
+                                "Async.RunSynchronously"
+                            else
+                                // Get more context for better error messages
+                                let parts = mfv.FullName.Split '.'
+
+                                if parts.Length >= 2 then
+                                    $"{parts.[parts.Length - 2]}.{parts.[parts.Length - 1]}"
                                 else
-                                    // Get more context for better error messages
-                                    let parts = mfv.FullName.Split '.'
+                                    mfv.DisplayName
 
-                                    if parts.Length >= 2 then
-                                        $"{parts.[parts.Length - 2]}.{parts.[parts.Length - 1]}"
-                                    else
-                                        mfv.DisplayName
-
-                            violations.Add (m, "method", methodName)
+                        violations.Add (m, "method", methodName)
 
                     // Check for property getters (Result property access)
                     elif problematicProperties.Contains mfv.FullName then
-                        if Deactivated.comment SwitchOffComment comments sourceText m |> Option.isNone then
-                            // For property getters, use just the property name
-                            violations.Add (m, "property", "Result")
+                        // For property getters, use just the property name
+                        violations.Add (m, "property", "Result")
             }
 
         match checkFileResults.ImplementationFile with
@@ -84,12 +79,11 @@ module BlockingAnalyzer =
         violations
         |> Seq.map (fun (range, _kind, name) ->
             {
-                Type = "SyncBlockingAnalyzer"
+                Type = "BlockingCallsAnalyzer"
                 Message =
                     $"Synchronous blocking call '%s{name}' should be avoided. "
                     + "This can cause deadlocks and thread pool starvation. "
                     + "Consider using `let!` in a `task` or `async` computation expression. "
-                    + $"Suppress with comment including text '%s{SwitchOffComment}'."
                 Code = Code
                 Severity = Severity.Warning
                 Range = range

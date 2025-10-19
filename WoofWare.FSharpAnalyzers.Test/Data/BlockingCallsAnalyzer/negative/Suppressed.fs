@@ -4,13 +4,13 @@ open System.Threading.Tasks
 
 let testAsyncRunSynchronouslyWithComment () =
     let computation = async { return 42 }
-    // ANALYZER: synchronous blocking call allowed
+    // fsharpanalyzer: ignore-next-line WOOF-BLOCKING
     let result = Async.RunSynchronously computation
     result
 
 let testAsyncRunSynchronouslyWithCommentPiped () =
     let computation = async { return 42 }
-    // ANALYZER: synchronous blocking call allowed
+    // fsharpanalyzer: ignore-next-line WOOF-BLOCKING
     let result = computation |> Async.RunSynchronously
     result
 
@@ -19,7 +19,7 @@ let testAsyncRunSynchronouslyWithCommentDividing () =
 
     let result =
         computation
-        // ANALYZER: synchronous blocking call allowed
+        // fsharpanalyzer: ignore-next-line WOOF-BLOCKING
         |> Async.RunSynchronously
 
     result
@@ -28,23 +28,24 @@ let testTaskWaitWithComment () =
     let t = Task.Run (fun () -> 42)
 
     t
-    // ANALYZER: synchronous blocking call allowed for testing
+    // fsharpanalyzer: ignore-next-line WOOF-BLOCKING
     |> fun x -> x.Wait ()
-    // ANALYZER: synchronous blocking call allowed for testing
-    t.Result
+
+    t.Result // fsharpanalyzer: ignore-line WOOF-BLOCKING
 
 let testTaskResultWithCommentAbove () =
     let t = Task.Run (fun () -> "hello")
-    // ANALYZER: Synchronous Blocking Call Allowed (case insensitive)
+    // fsharpanalyzer: ignore-next-line WOOF-BLOCKING
     t.Result
 
 let testWithBlockComment () =
     let t = Task.Run (fun () -> 42)
-    (* ANALYZER: synchronous blocking call allowed *)
+    (* fsharpanalyzer: ignore-next-line WOOF-BLOCKING *)
     t.Wait ()
 
 let testGetResultWithComment () =
     let t = Task.Run (fun () -> 42)
     let awaiter = t.GetAwaiter ()
-    // ANALYZER: synchronous blocking call allowed in main
+    // synchronous blocking call allowed in main method
+    // fsharpanalyzer: ignore-next-line WOOF-BLOCKING
     awaiter.GetResult ()

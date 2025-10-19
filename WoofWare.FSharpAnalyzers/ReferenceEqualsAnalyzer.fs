@@ -14,9 +14,6 @@ module ReferenceEqualsAnalyzer =
     [<Literal>]
     let Code = "WOOF-REFEQUALS"
 
-    [<Literal>]
-    let SwitchOffComment = "ANALYZER: ReferenceEquals allowed"
-
     let analyze (sourceText : ISourceText) (ast : ParsedInput) (checkFileResults : FSharpCheckFileResults) =
         let comments =
             match ast with
@@ -30,8 +27,7 @@ module ReferenceEqualsAnalyzer =
                 override _.WalkCall _ (mfv : FSharpMemberOrFunctionOrValue) _ _ _ (m : range) =
                     // Check for Object.ReferenceEquals calls
                     if mfv.FullName = "System.Object.ReferenceEquals" then
-                        if Deactivated.comment SwitchOffComment comments sourceText m |> Option.isNone then
-                            violations.Add m
+                        violations.Add m
             }
 
         match checkFileResults.ImplementationFile with
@@ -47,7 +43,6 @@ module ReferenceEqualsAnalyzer =
                     + "It silently does the wrong thing on value types, and lacks type safety - "
                     + "it's too easy to accidentally compare objects of different types. "
                     + "Use a type-safe wrapper like 'let referenceEquals<'a when 'a : not struct> (x : 'a) (y : 'a) : bool = ...' instead. "
-                    + $"Suppress with comment including text '%s{SwitchOffComment}'."
                 Code = Code
                 Severity = Severity.Warning
                 Range = range

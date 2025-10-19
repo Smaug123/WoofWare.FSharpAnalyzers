@@ -1,0 +1,4 @@
+WOOF-BLOCKING | Warning | (9,17--9,37) | Synchronous blocking call 'TaskAwaiter.GetResult' should be avoided. This can cause deadlocks and thread pool starvation. Consider using `let!` in a `task` or `async` computation expression. 
+WOOF-BLOCKING | Warning | (15,4--15,24) | Synchronous blocking call 'TaskAwaiter.GetResult' should be avoided. This can cause deadlocks and thread pool starvation. Consider using `let!` in a `task` or `async` computation expression. 
+WOOF-BLOCKING | Warning | (20,4--20,24) | Synchronous blocking call 'ValueTaskAwaiter.GetResult' should be avoided. This can cause deadlocks and thread pool starvation. Consider using `let!` in a `task` or `async` computation expression. 
+WOOF-BLOCKING | Warning | (25,17--25,37) | Synchronous blocking call 'ValueTaskAwaiter.GetResult' should be avoided. This can cause deadlocks and thread pool starvation. Consider using `let!` in a `task` or `async` computation expression. 
