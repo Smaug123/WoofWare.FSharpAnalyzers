@@ -129,6 +129,7 @@ module Tests =
                 ExcludeInclude.IncludeFilter (fun s -> s = analyzerName)
             )
 
+        stats.Analyzers |> shouldEqual 1
         stats.FailedAssemblies |> shouldEqual 0
         stats.AnalyzerAssemblies |> shouldBeGreaterThan 0
         client
