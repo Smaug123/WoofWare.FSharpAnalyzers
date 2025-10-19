@@ -4,6 +4,10 @@
     <TargetFramework>net8.0</TargetFramework>
     <!-- https://learn.microsoft.com/en-us/nuget/reference/msbuild-targets#pack-target-inputs -->
     <DevelopmentDependency>true</DevelopmentDependency>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_AddAnalyzersToOutput</TargetsForTfmSpecificContentInPackage>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <Description>Opinionated F# source analyzers</Description>
     <Authors>PatrickStevens</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -39,4 +43,10 @@
     <PackageReference Include="FSharp.Analyzers.SDK" Version="0.32.1" />
   </ItemGroup>
 
+    <Target Name="_AddAnalyzersToOutput">
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(OutputPath)\$(AssemblyName).dll" PackagePath="analyzers/dotnet/fs" />
+    </ItemGroup>
+
+  </Target>
 </Project>
