@@ -7,7 +7,7 @@ They're intended for my personal use.
 
 # Analyzers
 
-## BlockingAnalyzer
+## BlockingCallsAnalyzer
 
 Bans the use of blocking calls like `Async.RunSynchronously`.
 

@@ -9,7 +9,7 @@ open FSharp.Compiler.SyntaxTrivia
 open FSharp.Compiler.Text
 
 [<RequireQualifiedAccess>]
-module BlockingAnalyzer =
+module BlockingCallsAnalyzer =
 
     [<Literal>]
     let Code = "WOOF-BLOCKING"
