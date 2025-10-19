@@ -26,7 +26,7 @@
 
   <ItemGroup>
     <Compile Include="DeactivateComment.fs" />
-    <Compile Include="BlockingAnalyzer.fs" />
+    <Compile Include="BlockingCallsAnalyzer.fs" />
     <Compile Include="ReferenceEqualsAnalyzer.fs" />
     <Compile Include="TaskCompletionSourceAnalyzer.fs" />
     <None Include="..\README.md">
