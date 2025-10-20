@@ -22,7 +22,11 @@ type TestData =
     member this.AnalyzerModuleName = this.AnalyzerName + TestData.ModuleNameSuffix
 
     override this.ToString () =
-        $"%s{this.AnalyzerName} - %s{this.FileName}"
+        let s = $"%s{this.AnalyzerName} - %s{this.FileName}"
+
+        match this.FileNameOfExpected with
+        | None -> s + " - negative"
+        | Some _ -> s
 
     member this.ResourceName =
         match this.FileNameOfExpected with

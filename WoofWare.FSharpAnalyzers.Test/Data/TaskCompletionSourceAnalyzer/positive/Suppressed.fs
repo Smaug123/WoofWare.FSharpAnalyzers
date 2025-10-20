@@ -3,7 +3,7 @@ module TaskCompletionSourceSuppressed
 open System.Threading.Tasks
 
 let createTcsSuppressed () =
-    // ANALYZER: RunContinuationsAsynchronously explicitly skipped here
+    // fsharpanalyzer: ignore-line-next WOOF-TCS-ASYNC
     let tcs = TaskCompletionSource<int> ()
     tcs.SetResult 42
     tcs.Task

@@ -3,7 +3,8 @@ module SafeAlternatives
 // This file demonstrates safe alternatives to Object.ReferenceEquals
 
 let referenceEquals<'a when 'a : not struct> (x : 'a) (y : 'a) : bool =
-    // ANALYZER: ReferenceEquals allowed
+    // this function is the type-safe wrapper around the unsafe function!
+    // fsharpanalyzer: ignore-line-next WOOF-REFEQUALS
     obj.ReferenceEquals (x, y)
 
 let testSafeWrapper () =
