@@ -5,17 +5,11 @@ open System
 let testWithSuppression () =
     let x = obj ()
     let y = obj ()
-    // ANALYZER: ReferenceEquals allowed
+    // fsharpanalyzer: ignore-line-next WOOF-REFEQUALS
     Object.ReferenceEquals (x, y)
 
 let testWithSuppressionBlockComment () =
     let x = obj ()
     let y = obj ()
-    (* ANALYZER: ReferenceEquals allowed for testing *)
-    Object.ReferenceEquals (x, y)
-
-let testWithSuppressionCaseInsensitive () =
-    let x = obj ()
-    let y = obj ()
-    // ANALYZER: referenceequals allowed here
+    // fsharpanalyzer: ignore-line-next WOOF-REFEQUALS
     Object.ReferenceEquals (x, y)

@@ -133,7 +133,7 @@ module TaskCompletionSourceAnalyzer =
                     "TaskCompletionSource<T> created without TaskCreationOptions.RunContinuationsAsynchronously. "
                     + "This can cause continuations to run inline on the calling thread, leading to deadlocks, "
                     + "thread-pool starvation, and corruption of state. "
-                    + "Always use: new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously). "
+                    + "Always use: new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously)."
                 Code = Code
                 Severity = Severity.Warning
                 Range = range

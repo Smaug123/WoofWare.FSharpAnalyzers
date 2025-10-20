@@ -11,8 +11,7 @@ They're intended for my personal use.
 
 Bans the use of blocking calls like `Async.RunSynchronously`.
 
-You will have to have a blocking call in your main method; use the magic suppression string `ANALYZER: synchronous blocking call allowed`
-(optionally with a rationale appended) on the preceding line to suppress the analyzer on that line.
+You will have to have a blocking call in your main method; use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-BLOCKING" to guard that line.
 
 ### Rationale
 
@@ -22,8 +21,8 @@ Prevent [sync-over-async](https://learn.microsoft.com/en-us/archive/msdn-magazin
 
 Bans the use of `Object.ReferenceEquals`.
 
-Use the magic suppression string `ANALYZER: ReferenceEquals allowed`
-(optionally with a rationale appended) on the preceding line to suppress the analyzer on that line.
+Use the [suppression comment](mhttps://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-REFEQUALS" to suppress the analyzer.
+(If you define a type-safe version of `ReferenceEquals` - see the next section - then you will have to specify the suppression inside that function.)
 
 ### Rationale
 
@@ -46,8 +45,7 @@ This prevents both issues: the `not struct` constraint prevents value types from
 
 Requires `TaskCompletionSource<T>` to be created with `TaskCreationOptions.RunContinuationsAsynchronously`.
 
-Use the magic suppression string `ANALYZER: RunContinuationsAsynchronously`
-(optionally with a rationale appended) on the preceding line to suppress the analyzer on that line.
+Use the [suppression comment](mhttps://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) `fsharpanalyzer: ignore-line WOOF-TCS-ASYNC` to suppress the analyzer.
 
 ### Rationale
 

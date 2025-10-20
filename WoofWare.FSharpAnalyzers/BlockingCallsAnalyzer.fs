@@ -83,7 +83,7 @@ module BlockingCallsAnalyzer =
                 Message =
                     $"Synchronous blocking call '%s{name}' should be avoided. "
                     + "This can cause deadlocks and thread pool starvation. "
-                    + "Consider using `let!` in a `task` or `async` computation expression. "
+                    + "Consider using `let!` in a `task` or `async` computation expression."
                 Code = Code
                 Severity = Severity.Warning
                 Range = range

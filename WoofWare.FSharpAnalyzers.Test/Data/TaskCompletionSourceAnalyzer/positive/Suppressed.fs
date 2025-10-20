@@ -4,7 +4,7 @@ open System.Threading.Tasks
 
 let createTcsSuppressed () =
     // fsharpanalyzer: ignore-line-next WOOF-TCS-ASYNC
-    let tcs = TaskCompletionSource<int> () // fsharpanalyzer: ignore-line WOOF-TCS-ASYNC
+    let tcs = TaskCompletionSource<int> ()
     tcs.SetResult 42
     tcs.Task
 
