@@ -2,21 +2,20 @@ module EmptyDispose
 
 open System
 
-type MyEmptyDisposable() =
+type MyEmptyDisposable () =
     interface IDisposable with
-        member this.Dispose() = ()
+        member this.Dispose () = ()
 
-type MyDisposableWithSimpleCleanup() =
+type MyDisposableWithSimpleCleanup () =
     let mutable disposed = false
 
     interface IDisposable with
-        member this.Dispose() =
-            disposed <- true
+        member this.Dispose () = disposed <- true
 
-type MyDisposableWithGCSuppressFinalize() =
+type MyDisposableWithGCSuppressFinalize () =
     let mutable disposed = false
 
     interface IDisposable with
-        member this.Dispose() =
+        member this.Dispose () =
             disposed <- true
-            GC.SuppressFinalize(this)
+            GC.SuppressFinalize (this)

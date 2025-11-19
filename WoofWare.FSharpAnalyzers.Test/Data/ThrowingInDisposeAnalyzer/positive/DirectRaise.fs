@@ -2,21 +2,21 @@ module DirectRaise
 
 open System
 
-type MyDisposable() =
+type MyDisposable () =
     interface IDisposable with
-        member this.Dispose() =
+        member this.Dispose () =
             raise (InvalidOperationException "Cannot dispose")
 
-type MyDisposableWithField() =
+type MyDisposableWithField () =
     let mutable disposed = false
 
     interface IDisposable with
-        member this.Dispose() =
+        member this.Dispose () =
             if disposed then
                 raise (ObjectDisposedException "Already disposed")
+
             disposed <- true
 
-type MyDisposableRaiseWithoutException() =
+type MyDisposableRaiseWithoutException () =
     interface IDisposable with
-        member this.Dispose() =
-            raise (Failure "error")
+        member this.Dispose () = raise (Failure "error")

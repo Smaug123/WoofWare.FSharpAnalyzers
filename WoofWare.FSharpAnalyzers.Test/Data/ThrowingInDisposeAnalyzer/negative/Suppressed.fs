@@ -2,25 +2,25 @@ module Suppressed
 
 open System
 
-type MySuppressedDisposable() =
+type MySuppressedDisposable () =
     interface IDisposable with
-        member this.Dispose() =
+        member this.Dispose () =
             // fsharpanalyzer: ignore-line-next WOOF-THROWING-IN-DISPOSE
             raise (InvalidOperationException "Intentionally throwing")
 
-type MySuppressedDisposableFailwith() =
+type MySuppressedDisposableFailwith () =
     interface IDisposable with
-        member this.Dispose() =
+        member this.Dispose () =
             // fsharpanalyzer: ignore-line-next WOOF-THROWING-IN-DISPOSE
             failwith "Intentionally failing"
 
-type MySuppressedDisposableInvalidOp() =
+type MySuppressedDisposableInvalidOp () =
     interface IDisposable with
-        member this.Dispose() =
+        member this.Dispose () =
             // fsharpanalyzer: ignore-line-next WOOF-THROWING-IN-DISPOSE
             invalidOp "Intentionally invalid"
 
-type MySuppressedDisposableSameLine() =
+type MySuppressedDisposableSameLine () =
     interface IDisposable with
-        member this.Dispose() =
+        member this.Dispose () =
             raise (InvalidOperationException "Intentionally throwing") // fsharpanalyzer: ignore-line WOOF-THROWING-IN-DISPOSE

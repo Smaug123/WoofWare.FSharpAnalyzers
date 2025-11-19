@@ -28,6 +28,7 @@
     <Compile Include="BlockingCallsAnalyzer.fs" />
     <Compile Include="ReferenceEqualsAnalyzer.fs" />
     <Compile Include="TaskCompletionSourceAnalyzer.fs" />
+    <Compile Include="ThrowingInDisposeAnalyzer.fs" />
     <None Include="..\README.md">
       <Pack>True</Pack>
       <PackagePath>\</PackagePath>

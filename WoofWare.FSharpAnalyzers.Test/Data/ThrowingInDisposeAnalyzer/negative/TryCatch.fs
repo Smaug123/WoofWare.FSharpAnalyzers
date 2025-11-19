@@ -2,18 +2,18 @@ module TryCatch
 
 open System
 
-type MyDisposableWithTryCatch() =
+type MyDisposableWithTryCatch () =
     let mutable resource = Some 42
 
     interface IDisposable with
-        member this.Dispose() =
+        member this.Dispose () =
             try
                 resource <- None
             with ex ->
                 // Log and swallow
                 printfn "Error disposing: %s" ex.Message
 
-type MyDisposableWithTryCatchInHelper() =
+type MyDisposableWithTryCatchInHelper () =
     let cleanup () =
         try
             // Some cleanup that might throw
@@ -23,12 +23,11 @@ type MyDisposableWithTryCatchInHelper() =
             () // Swallow
 
     interface IDisposable with
-        member this.Dispose() =
-            cleanup ()
+        member this.Dispose () = cleanup ()
 
-type MyDisposableWithNestedTryCatch() =
+type MyDisposableWithNestedTryCatch () =
     interface IDisposable with
-        member this.Dispose() =
+        member this.Dispose () =
             try
                 try
                     printfn "Disposing"

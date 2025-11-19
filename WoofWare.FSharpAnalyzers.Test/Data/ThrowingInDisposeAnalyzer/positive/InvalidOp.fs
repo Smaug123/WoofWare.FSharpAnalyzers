@@ -2,17 +2,16 @@ module InvalidOp
 
 open System
 
-type MyDisposableInvalidOp() =
+type MyDisposableInvalidOp () =
     interface IDisposable with
-        member this.Dispose() =
+        member this.Dispose () =
             invalidOp "Invalid operation during dispose"
 
-type MyDisposableInvalidArg() =
+type MyDisposableInvalidArg () =
     interface IDisposable with
-        member this.Dispose() =
+        member this.Dispose () =
             invalidArg "param" "Invalid argument during dispose"
 
-type MyDisposableNullArg() =
+type MyDisposableNullArg () =
     interface IDisposable with
-        member this.Dispose() =
-            nullArg "param"
+        member this.Dispose () = nullArg "param"
