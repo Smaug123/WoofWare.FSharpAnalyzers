@@ -76,9 +76,17 @@ module ThrowingInDisposeAnalyzer =
         else
             false
 
-    /// Recursively walk an expression to find throw calls
+    /// Recursively walk an expression to find throw calls (not caught by try-catch)
     let rec findThrowCalls (expr : FSharpExpr) (violations : ResizeArray<range * string>) =
         match expr with
+        | FSharp.Compiler.Symbols.FSharpExprPatterns.TryWith (tryExpr, _, _, _, catchExpr, _, _) ->
+            // Don't check the try body - exceptions there are caught
+            // But do check the catch handler - exceptions there can still escape
+            findThrowCalls catchExpr violations
+        | FSharp.Compiler.Symbols.FSharpExprPatterns.TryFinally (tryExpr, finallyExpr, _, _) ->
+            // TryFinally doesn't catch exceptions, so check both parts
+            findThrowCalls tryExpr violations
+            findThrowCalls finallyExpr violations
         | FSharp.Compiler.Symbols.FSharpExprPatterns.Call (_, _, _, _, argExprs) ->
             // Check if this is a throw call
             let callee =
@@ -108,6 +116,59 @@ module ThrowingInDisposeAnalyzer =
             expr.ImmediateSubExpressions
             |> Seq.iter (fun subExpr -> findThrowCalls subExpr violations)
 
+    /// Check if a type implements IDisposable
+    let implementsIDisposable (typ : FSharpType) =
+        typ.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
+        || (typ.TypeDefinition.AllInterfaces
+            |> Seq.exists (fun iface ->
+                iface.HasTypeDefinition
+                && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
+            ))
+
+    /// Recursively walk expressions to find object expressions implementing IDisposable
+    let rec findObjectExpressions (expr : FSharpExpr) (violations : ResizeArray<range * string>) =
+        match expr with
+        | FSharp.Compiler.Symbols.FSharpExprPatterns.ObjectExpr (typ, baseCall, overrides, interfaceImpls) ->
+            // Check if this object expression implements IDisposable
+            if implementsIDisposable typ then
+                // Check each override for Dispose methods
+                overrides
+                |> List.iter (fun objMember ->
+                    let signature = objMember.Signature
+                    // Check if this is a Dispose method by name and interface
+                    let isDispose =
+                        (signature.Name = "Dispose" || signature.Name = "System.IDisposable.Dispose")
+                        && (signature.DeclaringType.HasTypeDefinition
+                            && signature.DeclaringType.TypeDefinition.TryGetFullName () = Some "System.IDisposable")
+
+                    if isDispose then
+                        findThrowCalls objMember.Body violations
+                )
+
+                // Check interface implementations
+                interfaceImpls
+                |> List.iter (fun (iface, members) ->
+                    // Check if this is the IDisposable interface
+                    let isIDisposable =
+                        iface.HasTypeDefinition
+                        && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
+
+                    if isIDisposable then
+                        members
+                        |> List.iter (fun objMember ->
+                            // All members of IDisposable are Dispose methods
+                            findThrowCalls objMember.Body violations
+                        )
+                )
+
+            // Continue walking sub-expressions
+            expr.ImmediateSubExpressions
+            |> Seq.iter (fun subExpr -> findObjectExpressions subExpr violations)
+        | _ ->
+            // Walk all sub-expressions
+            expr.ImmediateSubExpressions
+            |> Seq.iter (fun subExpr -> findObjectExpressions subExpr violations)
+
     let analyze (sourceText : ISourceText) (ast : ParsedInput) (typedTree : FSharpImplementationFileContents) =
         let comments =
             match ast with
@@ -127,7 +188,12 @@ module ThrowingInDisposeAnalyzer =
                     if isDisposeMember mfv then
                         // Walk the expression to find throw calls
                         findThrowCalls expr violations
-                | FSharpImplementationFileDeclaration.InitAction expr -> () // Don't check init actions
+                    else
+                        // For non-Dispose methods, check for object expressions implementing IDisposable
+                        findObjectExpressions expr violations
+                | FSharpImplementationFileDeclaration.InitAction expr ->
+                    // Check for object expressions in init actions too
+                    findObjectExpressions expr violations
             )
 
         walkDeclarations typedTree.Declarations
