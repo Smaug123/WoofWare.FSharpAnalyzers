@@ -29,7 +29,8 @@ module ThrowingInDisposeAnalyzer =
 
     /// Check if a member is a Dispose method (either IDisposable.Dispose or Dispose(bool))
     let isDisposeMember (mfv : FSharpMemberOrFunctionOrValue) =
-        if mfv.CompiledName = "Dispose" then
+        // Check for both "Dispose" and "System.IDisposable.Dispose" (explicit interface implementation)
+        if mfv.CompiledName = "Dispose" || mfv.CompiledName = "System.IDisposable.Dispose" then
             // Check if this is implementing IDisposable.Dispose
             let implementsIDisposableDispose =
                 mfv.ImplementedAbstractSignatures
