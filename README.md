@@ -21,7 +21,7 @@ Prevent [sync-over-async](https://learn.microsoft.com/en-us/archive/msdn-magazin
 
 Bans the use of `Object.ReferenceEquals`.
 
-Use the [suppression comment](mhttps://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-REFEQUALS" to suppress the analyzer.
+Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-REFEQUALS" to suppress the analyzer.
 (If you define a type-safe version of `ReferenceEquals` - see the next section - then you will have to specify the suppression inside that function.)
 
 ### Rationale
@@ -45,7 +45,7 @@ This prevents both issues: the `not struct` constraint prevents value types from
 
 Requires `TaskCompletionSource<T>` to be created with `TaskCreationOptions.RunContinuationsAsynchronously`.
 
-Use the [suppression comment](mhttps://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) `fsharpanalyzer: ignore-line WOOF-TCS-ASYNC` to suppress the analyzer.
+Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) `fsharpanalyzer: ignore-line WOOF-TCS-ASYNC` to suppress the analyzer.
 
 ### Rationale
 
@@ -62,6 +62,19 @@ Always create `TaskCompletionSource<T>` with `TaskCreationOptions.RunContinuatio
 ```fsharp
 let tcs = TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously)
 ```
+
+## ThrowingInDisposeAnalyzer
+
+Bans throwing in a `Dispose` implementation.
+
+Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-THROWING-DISPOSE" to suppress the analyzer.
+
+### Rationale
+
+See [the C# analyzer](https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca1065).
+Basically, users find it very confusing when a `finally` clause still needs exception handling inside it.
+
+Any `Dispose (isDisposing = false)` code path (conventionally called by the finaliser thread) is especially bad to throw in, because such errors are completely recoverable.
 
 # Licence
 

@@ -1,8 +1,6 @@
 namespace WoofWare.FSharpAnalyzers
 
 open FSharp.Analyzers.SDK
-open FSharp.Analyzers.SDK.TASTCollecting
-open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.Symbols
 open FSharp.Compiler.Syntax
 open FSharp.Compiler.SyntaxTrivia
@@ -12,20 +10,20 @@ open FSharp.Compiler.Text
 module ThrowingInDisposeAnalyzer =
 
     [<Literal>]
-    let Code = "WOOF-THROWING-IN-DISPOSE"
+    let Code = "WOOF-THROWING-DISPOSE"
 
-    /// Functions that throw exceptions
+    /// Functions that throw exceptions, mapped from full name to display name
     let throwingFunctions =
         [
-            "Microsoft.FSharp.Core.Operators.raise"
-            "Microsoft.FSharp.Core.Operators.failwith"
-            "Microsoft.FSharp.Core.Operators.failwithf"
-            "Microsoft.FSharp.Core.Operators.invalidOp"
-            "Microsoft.FSharp.Core.Operators.invalidArg"
-            "Microsoft.FSharp.Core.Operators.nullArg"
-            "Microsoft.FSharp.Core.ExtraTopLevelOperators.failwithf"
+            "Microsoft.FSharp.Core.Operators.raise", "raise"
+            "Microsoft.FSharp.Core.Operators.failwith", "failwith"
+            "Microsoft.FSharp.Core.Operators.failwithf", "failwithf"
+            "Microsoft.FSharp.Core.Operators.invalidOp", "invalidOp"
+            "Microsoft.FSharp.Core.Operators.invalidArg", "invalidArg"
+            "Microsoft.FSharp.Core.Operators.nullArg", "nullArg"
+            "Microsoft.FSharp.Core.ExtraTopLevelOperators.failwithf", "failwithf"
         ]
-        |> Set.ofList
+        |> Map.ofList
 
     /// Check if a member is a Dispose method (either IDisposable.Dispose or Dispose(bool))
     let isDisposeMember (mfv : FSharpMemberOrFunctionOrValue) =
@@ -79,7 +77,7 @@ module ThrowingInDisposeAnalyzer =
     /// Recursively walk an expression to find throw calls (not caught by try-catch)
     let rec findThrowCalls (expr : FSharpExpr) (violations : ResizeArray<range * string>) =
         match expr with
-        | FSharp.Compiler.Symbols.FSharpExprPatterns.TryWith (tryExpr, _, _, _, catchExpr, _, _) ->
+        | FSharp.Compiler.Symbols.FSharpExprPatterns.TryWith (_, _, _, _, catchExpr, _, _) ->
             // Don't check the try body - exceptions there are caught
             // But do check the catch handler - exceptions there can still escape
             findThrowCalls catchExpr violations
@@ -95,16 +93,10 @@ module ThrowingInDisposeAnalyzer =
                 | _ -> None
 
             match callee with
-            | Some mfv when throwingFunctions.Contains mfv.FullName ->
+            | Some mfv when Map.containsKey mfv.FullName throwingFunctions ->
                 let functionName =
-                    match mfv.FullName with
-                    | "Microsoft.FSharp.Core.Operators.raise" -> "raise"
-                    | "Microsoft.FSharp.Core.Operators.failwith" -> "failwith"
-                    | "Microsoft.FSharp.Core.Operators.failwithf" -> "failwithf"
-                    | "Microsoft.FSharp.Core.Operators.invalidOp" -> "invalidOp"
-                    | "Microsoft.FSharp.Core.Operators.invalidArg" -> "invalidArg"
-                    | "Microsoft.FSharp.Core.Operators.nullArg" -> "nullArg"
-                    | _ -> mfv.DisplayName
+                    Map.tryFind mfv.FullName throwingFunctions
+                    |> Option.defaultValue mfv.DisplayName
 
                 violations.Add (expr.Range, functionName)
             | _ -> ()
