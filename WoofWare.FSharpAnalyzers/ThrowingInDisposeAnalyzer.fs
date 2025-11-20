@@ -48,9 +48,13 @@ module ThrowingInDisposeAnalyzer =
 
             // Check if it's a Dispose(bool) helper method (common dispose pattern)
             let isDisposeBool =
-                mfv.CurriedParameterGroups.Count = 1
-                && mfv.CurriedParameterGroups.[0].Count = 1
-                && mfv.CurriedParameterGroups.[0].[0].Type.BasicQualifiedName = "bool"
+                if mfv.CurriedParameterGroups.Count = 1 && mfv.CurriedParameterGroups.[0].Count = 1 then
+                    let param = mfv.CurriedParameterGroups.[0].[0]
+
+                    param.Type.HasTypeDefinition
+                    && param.Type.TypeDefinition.TryGetFullName () = Some "System.Boolean"
+                else
+                    false
 
             // Temporarily: also allow if has no parameters and is part of a type that implements IDisposable
             // This catches explicit interface implementations that might not be detected above
