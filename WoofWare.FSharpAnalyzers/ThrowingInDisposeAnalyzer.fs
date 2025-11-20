@@ -2,8 +2,6 @@ namespace WoofWare.FSharpAnalyzers
 
 open FSharp.Analyzers.SDK
 open FSharp.Compiler.Symbols
-open FSharp.Compiler.Syntax
-open FSharp.Compiler.SyntaxTrivia
 open FSharp.Compiler.Text
 
 [<RequireQualifiedAccess>]
@@ -77,19 +75,19 @@ module ThrowingInDisposeAnalyzer =
     /// Recursively walk an expression to find throw calls (not caught by try-catch)
     let rec findThrowCalls (expr : FSharpExpr) (violations : ResizeArray<range * string>) =
         match expr with
-        | FSharp.Compiler.Symbols.FSharpExprPatterns.TryWith (_, _, _, _, catchExpr, _, _) ->
+        | FSharpExprPatterns.TryWith (_, _, _, _, catchExpr, _, _) ->
             // Don't check the try body - exceptions there are caught
             // But do check the catch handler - exceptions there can still escape
             findThrowCalls catchExpr violations
-        | FSharp.Compiler.Symbols.FSharpExprPatterns.TryFinally (tryExpr, finallyExpr, _, _) ->
+        | FSharpExprPatterns.TryFinally (tryExpr, finallyExpr, _, _) ->
             // TryFinally doesn't catch exceptions, so check both parts
             findThrowCalls tryExpr violations
             findThrowCalls finallyExpr violations
-        | FSharp.Compiler.Symbols.FSharpExprPatterns.Call (_, _, _, _, argExprs) ->
+        | FSharpExprPatterns.Call (objExprOpt, _, _, _, argExprs) ->
             // Check if this is a throw call
             let callee =
                 match expr with
-                | FSharp.Compiler.Symbols.FSharpExprPatterns.Call (_, mfv, _, _, _) -> Some mfv
+                | FSharpExprPatterns.Call (_, mfv, _, _, _) -> Some mfv
                 | _ -> None
 
             match callee with
@@ -101,6 +99,8 @@ module ThrowingInDisposeAnalyzer =
                 violations.Add (expr.Range, functionName)
             | _ -> ()
 
+            // Recursively check the receiver if present
+            objExprOpt |> Option.iter (fun objExpr -> findThrowCalls objExpr violations)
             // Recursively check arguments
             argExprs |> List.iter (fun arg -> findThrowCalls arg violations)
         | _ ->
@@ -110,6 +110,10 @@ module ThrowingInDisposeAnalyzer =
 
     /// Check if a type implements IDisposable
     let implementsIDisposable (typ : FSharpType) =
+        if not typ.HasTypeDefinition then
+            false
+        else
+
         typ.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
         || (typ.TypeDefinition.AllInterfaces
             |> Seq.exists (fun iface ->
@@ -121,9 +125,8 @@ module ThrowingInDisposeAnalyzer =
     let rec findObjectExpressions (expr : FSharpExpr) (violations : ResizeArray<range * string>) =
         match expr with
         | FSharp.Compiler.Symbols.FSharpExprPatterns.ObjectExpr (typ, baseCall, overrides, interfaceImpls) ->
-            // Check if this object expression implements IDisposable
+            // Check each override for Dispose methods (if type implements IDisposable)
             if implementsIDisposable typ then
-                // Check each override for Dispose methods
                 overrides
                 |> List.iter (fun objMember ->
                     let signature = objMember.Signature
@@ -137,21 +140,21 @@ module ThrowingInDisposeAnalyzer =
                         findThrowCalls objMember.Body violations
                 )
 
-                // Check interface implementations
-                interfaceImpls
-                |> List.iter (fun (iface, members) ->
-                    // Check if this is the IDisposable interface
-                    let isIDisposable =
-                        iface.HasTypeDefinition
-                        && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
+            // Always check interface implementations for IDisposable (e.g., { new IDisposable with ... })
+            interfaceImpls
+            |> List.iter (fun (iface, members) ->
+                // Check if this is the IDisposable interface
+                let isIDisposable =
+                    iface.HasTypeDefinition
+                    && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
 
-                    if isIDisposable then
-                        members
-                        |> List.iter (fun objMember ->
-                            // All members of IDisposable are Dispose methods
-                            findThrowCalls objMember.Body violations
-                        )
-                )
+                if isIDisposable then
+                    members
+                    |> List.iter (fun objMember ->
+                        // All members of IDisposable are Dispose methods
+                        findThrowCalls objMember.Body violations
+                    )
+            )
 
             // Continue walking sub-expressions
             expr.ImmediateSubExpressions
@@ -161,12 +164,7 @@ module ThrowingInDisposeAnalyzer =
             expr.ImmediateSubExpressions
             |> Seq.iter (fun subExpr -> findObjectExpressions subExpr violations)
 
-    let analyze (sourceText : ISourceText) (ast : ParsedInput) (typedTree : FSharpImplementationFileContents) =
-        let comments =
-            match ast with
-            | ParsedInput.ImplFile parsedImplFileInput -> parsedImplFileInput.Trivia.CodeComments
-            | _ -> []
-
+    let analyze (typedTree : FSharpImplementationFileContents) =
         let violations = ResizeArray<range * string> ()
 
         // Walk all declarations
@@ -215,20 +213,8 @@ module ThrowingInDisposeAnalyzer =
 
     [<CliAnalyzer(Name, ShortDescription)>]
     let cliAnalyzer : Analyzer<CliContext> =
-        fun ctx ->
-            async {
-                return
-                    ctx.TypedTree
-                    |> Option.map (analyze ctx.SourceText ctx.ParseFileResults.ParseTree)
-                    |> Option.defaultValue []
-            }
+        fun ctx -> async { return ctx.TypedTree |> Option.map analyze |> Option.defaultValue [] }
 
     [<EditorAnalyzer(Name, ShortDescription)>]
     let editorAnalyzer : Analyzer<EditorContext> =
-        fun ctx ->
-            async {
-                return
-                    ctx.TypedTree
-                    |> Option.map (analyze ctx.SourceText ctx.ParseFileResults.ParseTree)
-                    |> Option.defaultValue []
-            }
+        fun ctx -> async { return ctx.TypedTree |> Option.map analyze |> Option.defaultValue [] }

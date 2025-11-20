@@ -78,4 +78,4 @@ Any `Dispose (isDisposing = false)` code path (conventionally called by the fina
 
 # Licence
 
-WoofWare.FSharpAnalyzers is licensed to you under the MIT licence, a copy of which can be found at [LICENCE.md](./LICENSE.md).
+WoofWare.FSharpAnalyzers is licensed to you under the MIT licence, a copy of which can be found at [LICENSE.md](./LICENSE.md).
