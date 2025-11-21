@@ -75,37 +75,99 @@ module EarlyReturnAnalyzer =
             (expr.Type |> tryGetFullName |> Option.exists (fun name -> name = targetType))
 
     let collectReturnsOfType (targetType : string) (expr : FSharpExpr) (acc : HashSet<range>) =
-        let rec loop (current : FSharpExpr) =
+        let rec loop (depth : int) (current : FSharpExpr) =
             match current with
-            | Call (_, mfv, _, _, _) when isReturnForType targetType current mfv ->
+            | Call (Some objExpr, mfv, _, _, _) when isReturnForType targetType current mfv ->
+                // This is a Return call - add its range
                 acc.Add current.Range |> ignore
-            | _ ->
-                current.ImmediateSubExpressions |> Seq.iter loop
+            | Call (Some objExpr, mfv, _, _, args) when mfv.CompiledName = "ReturnFrom" ->
+                // Don't recurse into return! - it's a different scope
+                ()
+            | Call (objOpt, mfv, _, _, args) ->
+                // General Call node - explicitly recurse into object and arguments
+                objOpt |> Option.iter (loop depth)
+                args |> List.iter (loop depth)
+            | Application (Lambda (_, bodyExpr), _, args) ->
+                // Application of a lambda - this might be starting a new CE scope
+                // Check if the lambda body contains builder calls (indicating a nested CE)
+                let hasNestedCE =
+                    let rec checkExpr e =
+                        match e with
+                        | Call (Some _, mfv, _, _, _) ->
+                            match mfv.ApparentEnclosingEntity |> Option.bind (fun ent -> ent.TryFullName) with
+                            | Some name when builderMatches name -> true
+                            | _ -> e.ImmediateSubExpressions |> Seq.exists checkExpr
+                        | _ -> e.ImmediateSubExpressions |> Seq.exists checkExpr
+                    checkExpr bodyExpr
 
-        loop expr
+                if hasNestedCE && depth > 0 then
+                    // This is a nested CE, don't recurse into it
+                    ()
+                else
+                    // Not nested or we're at depth 0, recurse
+                    loop (depth + 1) bodyExpr
+                    args |> List.iter (loop depth)
+            | _ ->
+                current.ImmediateSubExpressions |> Seq.iter (loop depth)
+
+        loop 0 expr
+
+    let isBuilderMethod (name : string) (mfv : FSharpMemberOrFunctionOrValue) =
+        mfv.CompiledName = name
+
+    let isNonTrivialContinuation (expr : FSharpExpr) =
+        // Check if this is not just a Zero call (which represents an empty continuation)
+        match expr with
+        | Call (Some _, mfv, _, _, _) when isBuilderMethod "Zero" mfv -> false
+        | _ -> true
+
+    type Walker(violations : HashSet<range>) =
+        inherit TypedTreeCollectorBase()
+
+        override _.WalkCall (objOpt : FSharpExpr option) (mfv : FSharpMemberOrFunctionOrValue) _ _ (args : FSharpExpr list) _ =
+            // Look for Combine calls: these sequence computation expression parts
+            if isBuilderMethod "Combine" mfv && args.Length = 2 then
+                let firstPart = args.[0]
+                let secondPart = args.[1]
+
+                // If the first part contains returns and the second part is non-trivial,
+                // then those returns are not in tail position
+                if isNonTrivialContinuation secondPart then
+                    // We need to determine what type of computation this is
+                    // Look at the object the method is being called on
+                    match objOpt with
+                    | Some obj ->
+                        match obj.Type |> tryGetFullName with
+                        | Some typeName when builderMatches typeName ->
+                            // Determine the computation type from the builder type
+                            // For now, try to infer from the context; we'll collect returns for common types
+                            for compType in computationExpressionReturnTypes do
+                                collectReturnsOfType compType firstPart violations
+                        | _ -> ()
+                    | _ -> ()
+
+            // Also look for TryFinally: the finally block runs even if the try block returns
+            elif isBuilderMethod "TryFinally" mfv && args.Length = 2 then
+                let body = args.[0]
+                let finallyBlock = args.[1]
+
+                // Returns in the body are not in tail position because finally runs after
+                match objOpt with
+                | Some obj ->
+                    match obj.Type |> tryGetFullName with
+                    | Some typeName when builderMatches typeName ->
+                        for compType in computationExpressionReturnTypes do
+                            collectReturnsOfType compType body violations
+                    | _ -> ()
+                | _ -> ()
 
     let analyze (checkFileResults : FSharpCheckFileResults) =
         let violations = HashSet<range> ()
 
-        let walker =
-            { new TypedTreeCollectorBase() with
-                override _.WalkSequential (expr1 : FSharpExpr) (expr2 : FSharpExpr) =
-                    match expr2.Type |> tryGetFullName with
-                    | Some typeName when isComputationType typeName -> collectReturnsOfType typeName expr1 violations
-                    | _ -> ()
-
-                    base.WalkSequential expr1 expr2
-
-                override _.WalkTryFinally (body : FSharpExpr) (finalizeExpr : FSharpExpr) =
-                    match body.Type |> tryGetFullName with
-                    | Some typeName when isComputationType typeName -> collectReturnsOfType typeName body violations
-                    | _ -> ()
-
-                    base.WalkTryFinally body finalizeExpr
-            }
-
         match checkFileResults.ImplementationFile with
-        | Some typedTree -> walkTast walker typedTree
+        | Some typedTree ->
+            let walker = Walker violations
+            walkTast walker typedTree
         | None -> ()
 
         violations
