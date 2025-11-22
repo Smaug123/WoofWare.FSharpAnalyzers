@@ -170,6 +170,30 @@ module EarlyReturnAnalyzer =
                     | _ -> ()
                 | _ -> ()
 
+            // Look for While loops: returns in the body are not in tail position
+            // because the next iteration might still run
+            elif isBuilderMethod "While" mfv && args.Length = 2 then
+                let body = args.[1]
+
+                match objOpt with
+                | Some obj ->
+                    match obj.Type |> tryGetFullName with
+                    | Some typeName when builderMatches typeName -> collectReturns body violations
+                    | _ -> ()
+                | _ -> ()
+
+            // Look for For loops: returns in the body are not in tail position
+            // because there might be more elements in the sequence
+            elif isBuilderMethod "For" mfv && args.Length = 2 then
+                let body = args.[1]
+
+                match objOpt with
+                | Some obj ->
+                    match obj.Type |> tryGetFullName with
+                    | Some typeName when builderMatches typeName -> collectReturns body violations
+                    | _ -> ()
+                | _ -> ()
+
     let analyze (checkFileResults : FSharpCheckFileResults) =
         let violations = HashSet<range> ()
 
