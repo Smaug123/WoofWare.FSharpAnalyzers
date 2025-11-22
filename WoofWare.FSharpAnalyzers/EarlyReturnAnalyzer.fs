@@ -46,7 +46,12 @@ module EarlyReturnAnalyzer =
         |> Set.ofList
 
     let builderSuffixes =
-        [ "TaskBuilder"; "BackgroundTaskBuilder"; "ValueTaskBuilder"; "AsyncBuilder" ]
+        [
+            "TaskBuilder"
+            "BackgroundTaskBuilder"
+            "ValueTaskBuilder"
+            "AsyncBuilder"
+        ]
 
     let tryGetFullName (typ : FSharpType) =
         if typ.HasTypeDefinition then
@@ -58,11 +63,10 @@ module EarlyReturnAnalyzer =
         computationExpressionReturnTypes.Contains typeName
 
     let builderMatches (name : string) =
-        knownBuilderNames.Contains name
-        || builderSuffixes |> List.exists name.EndsWith
+        knownBuilderNames.Contains name || builderSuffixes |> List.exists name.EndsWith
 
     let isReturnForType (targetType : string) (expr : FSharpExpr) (mfv : FSharpMemberOrFunctionOrValue) =
-        if mfv.CompiledName <> "Return" then
+        if mfv.CompiledName <> "Return" && mfv.CompiledName <> "ReturnFrom" then
             false
         else
             let builderOk =
@@ -71,18 +75,14 @@ module EarlyReturnAnalyzer =
                 |> Option.exists builderMatches
 
             builderOk
-            &&
-            (expr.Type |> tryGetFullName |> Option.exists (fun name -> name = targetType))
+            && (expr.Type |> tryGetFullName |> Option.exists (fun name -> name = targetType))
 
     let collectReturnsOfType (targetType : string) (expr : FSharpExpr) (acc : HashSet<range>) =
         let rec loop (depth : int) (current : FSharpExpr) =
             match current with
             | Call (Some objExpr, mfv, _, _, _) when isReturnForType targetType current mfv ->
-                // This is a Return call - add its range
+                // This is a Return or ReturnFrom call - add its range
                 acc.Add current.Range |> ignore
-            | Call (Some objExpr, mfv, _, _, args) when mfv.CompiledName = "ReturnFrom" ->
-                // Don't recurse into return! - it's a different scope
-                ()
             | Call (objOpt, mfv, _, _, args) ->
                 // General Call node - explicitly recurse into object and arguments
                 objOpt |> Option.iter (loop depth)
@@ -98,6 +98,7 @@ module EarlyReturnAnalyzer =
                             | Some name when builderMatches name -> true
                             | _ -> e.ImmediateSubExpressions |> Seq.exists checkExpr
                         | _ -> e.ImmediateSubExpressions |> Seq.exists checkExpr
+
                     checkExpr bodyExpr
 
                 if hasNestedCE && depth > 0 then
@@ -107,13 +108,11 @@ module EarlyReturnAnalyzer =
                     // Not nested or we're at depth 0, recurse
                     loop (depth + 1) bodyExpr
                     args |> List.iter (loop depth)
-            | _ ->
-                current.ImmediateSubExpressions |> Seq.iter (loop depth)
+            | _ -> current.ImmediateSubExpressions |> Seq.iter (loop depth)
 
         loop 0 expr
 
-    let isBuilderMethod (name : string) (mfv : FSharpMemberOrFunctionOrValue) =
-        mfv.CompiledName = name
+    let isBuilderMethod (name : string) (mfv : FSharpMemberOrFunctionOrValue) = mfv.CompiledName = name
 
     let isNonTrivialContinuation (expr : FSharpExpr) =
         // Check if this is not just a Zero call (which represents an empty continuation)
@@ -121,10 +120,17 @@ module EarlyReturnAnalyzer =
         | Call (Some _, mfv, _, _, _) when isBuilderMethod "Zero" mfv -> false
         | _ -> true
 
-    type Walker(violations : HashSet<range>) =
-        inherit TypedTreeCollectorBase()
+    type Walker (violations : HashSet<range>) =
+        inherit TypedTreeCollectorBase ()
 
-        override _.WalkCall (objOpt : FSharpExpr option) (mfv : FSharpMemberOrFunctionOrValue) _ _ (args : FSharpExpr list) _ =
+        override _.WalkCall
+            (objOpt : FSharpExpr option)
+            (mfv : FSharpMemberOrFunctionOrValue)
+            _
+            _
+            (args : FSharpExpr list)
+            _
+            =
             // Look for Combine calls: these sequence computation expression parts
             if isBuilderMethod "Combine" mfv && args.Length = 2 then
                 let firstPart = args.[0]
@@ -197,10 +203,7 @@ module EarlyReturnAnalyzer =
 
     [<CliAnalyzer(Name, ShortDescription)>]
     let cliAnalyzer : Analyzer<CliContext> =
-        fun ctx ->
-            ctx.CheckFileResults
-            |> analyze
-            |> async.Return
+        fun ctx -> ctx.CheckFileResults |> analyze |> async.Return
 
     [<EditorAnalyzer(Name, ShortDescription)>]
     let editorAnalyzer : Analyzer<EditorContext> =

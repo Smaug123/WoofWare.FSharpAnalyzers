@@ -5,5 +5,6 @@ let f x =
         match x with
         | Some v -> return v
         | None -> ()
+
         printfn "more work"
     }

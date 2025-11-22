@@ -6,5 +6,6 @@ let f () =
             return ()
         with _ ->
             return ()
+
         printfn "cleanup"
     }

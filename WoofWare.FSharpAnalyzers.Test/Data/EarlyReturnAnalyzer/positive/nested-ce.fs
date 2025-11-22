@@ -8,7 +8,9 @@ let f () =
     async {
         let inner =
             task {
-                if condition then return ()
+                if condition then
+                    return ()
+
                 printfn "inner continues"
             }
 
