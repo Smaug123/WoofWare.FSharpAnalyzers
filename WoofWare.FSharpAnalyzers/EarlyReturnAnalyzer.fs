@@ -76,9 +76,22 @@ module EarlyReturnAnalyzer =
     let collectReturns (expr : FSharpExpr) (acc : HashSet<range>) =
         let rec loop (depth : int) (current : FSharpExpr) =
             match current with
-            | Call (Some objExpr, mfv, _, _, _) when isReturn mfv ->
+            | Call (Some objExpr, mfv, _, _, args) when isReturn mfv ->
                 // This is a Return or ReturnFrom call - add its range
-                acc.Add current.Range |> ignore
+                // When the current range is multi-line, it likely includes too much context
+                // (e.g., the entire try/with block). In that case, use the args' range.
+                let rangeToUse =
+                    if current.Range.StartLine <> current.Range.EndLine then
+                        // Multi-line range - use argument range for more precision
+                        match args with
+                        | firstArg :: _ ->
+                            let lastArg = args |> List.tryLast |> Option.defaultValue firstArg
+                            Range.mkRange firstArg.Range.FileName firstArg.Range.Start lastArg.Range.End
+                        | [] -> current.Range
+                    else
+                        current.Range
+
+                acc.Add rangeToUse |> ignore
             | Call (objOpt, mfv, _, _, args) ->
                 // General Call node - explicitly recurse into object and arguments
                 objOpt |> Option.iter (loop depth)
