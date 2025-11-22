@@ -65,14 +65,14 @@ let tcs = TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchro
 
 ## EarlyReturnAnalyzer
 
-Detects `return` expressions used in non-terminal positions inside `async { }`, `task { }`, and related computation expressions.
+Detects `return` and `return!` expressions used in non-terminal positions inside `async { }`, `task { }`, and related computation expressions.
 
 Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) `fsharpanalyzer: ignore-line WOOF-EARLY-RETURN` to suppress the analyzer.
 
 ### Rationale
 
 In computation expressions, `return` simply builds a value for the builder; it does **not** exit the computation the way imperative languages do.
-Any code following the `return` (other statements, loop iterations, `use` disposals, `finally` blocks, etc) still runs.
+Any code following the `return` (other statements, loop iterations, `finally` blocks, etc) still runs.
 
 Here is a concrete computation expression and desugaring that demonstrates the problem:
 
@@ -103,7 +103,7 @@ fun () ->
 
 Notice that the initial `if` branch has *not* caused any kind of short-circuiting; in fact, the first argument to `Combine` has the same value in both branches of the `if`!
 
-This analyzer highlights those non-terminal `return` calls so you can restructure the logic using explicit `if/else`, `match`, or `return!` patterns that make control flow clear.
+This analyzer highlights those non-terminal `return` calls so you can restructure the logic using explicit `if/else` or `match` patterns that clearly indicate what happens in every branch.
 
 ## ThrowingInDisposeAnalyzer
 
