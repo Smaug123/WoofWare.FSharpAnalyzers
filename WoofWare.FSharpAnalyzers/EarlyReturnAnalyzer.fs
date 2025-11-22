@@ -65,22 +65,18 @@ module EarlyReturnAnalyzer =
     let builderMatches (name : string) =
         knownBuilderNames.Contains name || builderSuffixes |> List.exists name.EndsWith
 
-    let isReturnForType (targetType : string) (expr : FSharpExpr) (mfv : FSharpMemberOrFunctionOrValue) =
+    let isReturn (mfv : FSharpMemberOrFunctionOrValue) =
         if mfv.CompiledName <> "Return" && mfv.CompiledName <> "ReturnFrom" then
             false
         else
-            let builderOk =
-                mfv.ApparentEnclosingEntity
-                |> Option.bind (fun ent -> ent.TryFullName)
-                |> Option.exists builderMatches
+            mfv.ApparentEnclosingEntity
+            |> Option.bind (fun ent -> ent.TryFullName)
+            |> Option.exists builderMatches
 
-            builderOk
-            && (expr.Type |> tryGetFullName |> Option.exists (fun name -> name = targetType))
-
-    let collectReturnsOfType (targetType : string) (expr : FSharpExpr) (acc : HashSet<range>) =
+    let collectReturns (expr : FSharpExpr) (acc : HashSet<range>) =
         let rec loop (depth : int) (current : FSharpExpr) =
             match current with
-            | Call (Some objExpr, mfv, _, _, _) when isReturnForType targetType current mfv ->
+            | Call (Some objExpr, mfv, _, _, _) when isReturn mfv ->
                 // This is a Return or ReturnFrom call - add its range
                 acc.Add current.Range |> ignore
             | Call (objOpt, mfv, _, _, args) ->
@@ -144,11 +140,7 @@ module EarlyReturnAnalyzer =
                     match objOpt with
                     | Some obj ->
                         match obj.Type |> tryGetFullName with
-                        | Some typeName when builderMatches typeName ->
-                            // Determine the computation type from the builder type
-                            // For now, try to infer from the context; we'll collect returns for common types
-                            for compType in computationExpressionReturnTypes do
-                                collectReturnsOfType compType firstPart violations
+                        | Some typeName when builderMatches typeName -> collectReturns firstPart violations
                         | _ -> ()
                     | _ -> ()
 
@@ -161,9 +153,7 @@ module EarlyReturnAnalyzer =
                 match objOpt with
                 | Some obj ->
                     match obj.Type |> tryGetFullName with
-                    | Some typeName when builderMatches typeName ->
-                        for compType in computationExpressionReturnTypes do
-                            collectReturnsOfType compType body violations
+                    | Some typeName when builderMatches typeName -> collectReturns body violations
                     | _ -> ()
                 | _ -> ()
 
