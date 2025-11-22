@@ -14,17 +14,6 @@ module EarlyReturnAnalyzer =
     [<Literal>]
     let Code = "WOOF-EARLY-RETURN"
 
-    let computationExpressionReturnTypes =
-        [
-            "Microsoft.FSharp.Control.FSharpAsync"
-            "Microsoft.FSharp.Control.FSharpAsync`1"
-            "System.Threading.Tasks.Task"
-            "System.Threading.Tasks.Task`1"
-            "System.Threading.Tasks.ValueTask"
-            "System.Threading.Tasks.ValueTask`1"
-        ]
-        |> Set.ofList
-
     let knownBuilderNames =
         [
             "Microsoft.FSharp.Control.AsyncBuilder"
@@ -58,9 +47,6 @@ module EarlyReturnAnalyzer =
             typ.TypeDefinition.TryFullName
         else
             None
-
-    let isComputationType (typeName : string) =
-        computationExpressionReturnTypes.Contains typeName
 
     let builderMatches (name : string) =
         knownBuilderNames.Contains name || builderSuffixes |> List.exists name.EndsWith
