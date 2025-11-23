@@ -7,6 +7,18 @@ They're intended for my personal use.
 
 # Analyzers
 
+## MissingCancellationTokenAnalyzer
+
+Prompts you to use overloads of `Task`-returning methods that take `CancellationToken`s.
+
+Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-MISSING-CT" to suppress the analyzer.
+
+### Rationale
+
+.NET's cooperative multitasking requires you to thread `CancellationToken`s around the code if you want your asynchronous operations to be cancellable.
+Nevertheless, idiomatic .NET APIs let you simply *not* do that by default, which means by default your code won't be cancellable.
+This analyzer detects when you've fallen into that pit of failure.
+
 ## BlockingCallsAnalyzer
 
 Bans the use of blocking calls like `Async.RunSynchronously`.
