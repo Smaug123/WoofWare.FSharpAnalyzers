@@ -29,6 +29,34 @@ You will have to have a blocking call in your main method; use the [suppression 
 
 Prevent [sync-over-async](https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming#async-all-the-way).
 
+## SuppressThrowingGenericAnalyzer
+
+Detects use of `ConfigureAwaitOptions.SuppressThrowing` with generic `Task<TResult>`.
+(For some reason, `ValueTask` doesn't accept `ConfigureAwaitOptions`.)
+
+Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-SUPPRESS-THROWING-GENERIC" to suppress the analyzer; but note that Microsoft says this code pattern is always wrong.
+
+### Rationale
+
+The `ConfigureAwaitOptions.SuppressThrowing` option is not supported by generic `Task<TResult>` because it can lead to returning an invalid `TResult` when an exception occurs. This is a runtime error that should be caught at build time.
+
+If you need to use `SuppressThrowing`, cast the task to non-generic `Task` first:
+
+```fsharp
+let t = Task.FromResult(42)
+// Bad: will fail at runtime
+let! _ = t.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing)
+
+// Good: cast to Task first
+do! (t :> Task).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing)
+```
+
+This analyzer mirrors the C# analyzer [CA2261](https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca2261), surfacing the error at build time rather than run time.
+
+### Limitations
+
+We don't try hard to follow e.g. options defined through a `let`-binding, so false negatives are possible.
+
 ## ReferenceEqualsAnalyzer
 
 Bans the use of `Object.ReferenceEquals`.
