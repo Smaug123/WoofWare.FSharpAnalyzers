@@ -1,0 +1,1 @@
+WOOF-EARLY-RETURN | Warning | (6,20--6,39) | Early return in computation expression: 'return' does not cause early exit. Code after this control flow will still execute. Consider restructuring to use if-then-else or match expressions that cover all cases.

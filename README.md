@@ -63,6 +63,50 @@ Always create `TaskCompletionSource<T>` with `TaskCreationOptions.RunContinuatio
 let tcs = TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously)
 ```
 
+## EarlyReturnAnalyzer
+
+Detects `return` and `return!` expressions used in non-terminal positions inside `async { }`, `task { }`, and related computation expressions.
+
+Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) `fsharpanalyzer: ignore-line WOOF-EARLY-RETURN` to suppress the analyzer.
+
+### Rationale
+
+In computation expressions, `return` simply builds a value for the builder; it does **not** exit the computation the way imperative languages do.
+Any code following the `return` (other statements, loop iterations, `finally` blocks, etc) still runs.
+
+Here is a concrete computation expression and desugaring that demonstrates the problem:
+
+```fsharp
+async {
+    if true then
+        return ()
+    printfn "hi!"
+    return ()
+}
+```
+
+```fsharp
+fun () ->
+    async.Combine (
+        if true then
+            async.Return ()
+        else
+            async.Zero ()
+        ,
+        async.Delay (fun () ->
+            printfn "hi!"
+            async.Return ()
+        )
+    )
+|> async.Delay
+```
+
+Notice that the initial `if` branch has *not* caused any kind of short-circuiting; we continue unconditionally to the `Delay`.
+
+This analyzer highlights those non-terminal `return` calls so you can restructure the logic using explicit `if/else` or `match` patterns that clearly indicate what happens in every branch.
+
+(GPT-5 wanted me to clarify this point, although I think nobody would expect different behaviour: we *don't* flag `return` statements after a `use` call, even though disposal is code that runs after the `return` statement. Leaving the scope by any means, including a `return`, should intuitively trigger the disposal; which is indeed what happens.)
+
 ## ThrowingInDisposeAnalyzer
 
 Bans throwing in a `Dispose` implementation.
