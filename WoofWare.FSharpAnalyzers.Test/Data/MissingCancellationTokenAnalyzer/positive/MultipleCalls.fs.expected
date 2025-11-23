@@ -1,0 +1,2 @@
+WOOF-MISSING-CT | Info | (8,17--8,33) | Method 'Task.Delay' returns a Task but is called without a CancellationToken. An overload exists that accepts a CancellationToken. Consider using the overload to enable proper cancellation.
+WOOF-MISSING-CT | Info | (10,24--10,63) | Method 'HttpClient.GetAsync' returns a Task but is called without a CancellationToken. An overload exists that accepts a CancellationToken. Consider using the overload to enable proper cancellation.
