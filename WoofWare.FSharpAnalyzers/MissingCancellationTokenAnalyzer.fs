@@ -43,7 +43,12 @@ module MissingCancellationTokenAnalyzer =
         mfv.CurriedParameterGroups
         |> Seq.collect id
         |> Seq.filter (fun param -> not (isCancellationToken param.Type))
-        |> Seq.map (fun param -> param.Type.TypeDefinition.TryGetFullName ())
+        |> Seq.map (fun param ->
+            if param.Type.HasTypeDefinition then
+                param.Type.TypeDefinition.TryGetFullName ()
+            else
+                None
+        )
         |> Seq.toList
 
     /// Find overloads of a method that accept CancellationToken

@@ -9,7 +9,7 @@ They're intended for my personal use.
 
 ## MissingCancellationTokenAnalyzer
 
-Prompts you to use overloads of `Task`-returning methods that take `CancellationToken`s.
+Prompts you to use overloads of `Task`/`ValueTask`-returning methods that take `CancellationToken`s.
 
 Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-MISSING-CT" to suppress the analyzer.
 
