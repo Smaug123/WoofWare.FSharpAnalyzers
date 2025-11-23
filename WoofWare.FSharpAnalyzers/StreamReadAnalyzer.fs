@@ -15,23 +15,25 @@ module StreamReadAnalyzer =
     let Code = "WOOF-STREAM-READ"
 
     let streamReadMethods =
-        [
-            "System.IO.Stream.Read"
-            "System.IO.Stream.ReadAsync"
-        ]
-        |> Set.ofList
+        [ "System.IO.Stream.Read" ; "System.IO.Stream.ReadAsync" ] |> Set.ofList
 
     let isIgnoreFunction (mfv : FSharpMemberOrFunctionOrValue) =
         mfv.FullName = "Microsoft.FSharp.Core.Operators.ignore"
 
-    let isStreamReadCall (mfv : FSharpMemberOrFunctionOrValue) =
-        streamReadMethods.Contains mfv.FullName
+    let isStreamReadCall (mfv : FSharpMemberOrFunctionOrValue) = streamReadMethods.Contains mfv.FullName
 
-    let isPipeRight (mfv : FSharpMemberOrFunctionOrValue) =
-        mfv.CompiledName = "op_PipeRight"
+    let isPipeRight (mfv : FSharpMemberOrFunctionOrValue) = mfv.CompiledName = "op_PipeRight"
 
     let isBind (mfv : FSharpMemberOrFunctionOrValue) =
-        mfv.CompiledName = "Bind"
+        mfv.DisplayName = "Bind"
+        || mfv.CompiledName = "Bind"
+        || mfv.CompiledName.EndsWith (".Bind")
+
+    // Check if a variable is used in an expression
+    let rec isVariableUsed (targetVar : FSharpMemberOrFunctionOrValue) (expr : FSharpExpr) : bool =
+        match expr with
+        | Value v when v = targetVar -> true
+        | _ -> expr.ImmediateSubExpressions |> Seq.exists (isVariableUsed targetVar)
 
     // Walk expression tree to find ignored Stream.Read calls
     let rec findIgnoredReads (expr : FSharpExpr) (acc : ResizeArray<range * string>) =
@@ -42,8 +44,14 @@ module StreamReadAnalyzer =
         match expr with
         // Pattern 1: stream.Read(...) |> ignore
         // This appears as: Call(op_PipeRight, [Call(Stream.Read, ...); Lambda(_, Call(ignore, ...))])
-        | Call (_, pipeRightMfv, _, _, [ Call (_, readMfv, _, _, _) as readCall ; Lambda (_, Call (_, ignoreMfv, _, _, _)) ]) when
-            isPipeRight pipeRightMfv && isStreamReadCall readMfv && isIgnoreFunction ignoreMfv
+        | Call (_,
+                pipeRightMfv,
+                _,
+                _,
+                [ Call (_, readMfv, _, _, _) as readCall ; Lambda (_, Call (_, ignoreMfv, _, _, _)) ]) when
+            isPipeRight pipeRightMfv
+            && isStreamReadCall readMfv
+            && isIgnoreFunction ignoreMfv
             ->
             acc.Add (readCall.Range, readMfv.DisplayName)
 
@@ -54,8 +62,9 @@ module StreamReadAnalyzer =
 
         // Pattern 3: let! _ = stream.ReadAsync(...)
         // This appears as: Call(Bind, [Call(Stream.ReadAsync, ...); Lambda(_arg1, ...)])
-        | Call (_, bindMfv, _, _, [ Call (_, readMfv, _, _, _) as readCall ; Lambda (v, _) ]) when
-            isBind bindMfv && isStreamReadCall readMfv && (v.DisplayName.StartsWith "_arg" || v.DisplayName = "_")
+        // We check if the lambda parameter is NOT used in the body to detect discarded results
+        | Call (_, bindMfv, _, _, [ Call (_, readMfv, _, _, _) as readCall ; Lambda (v, body) ]) when
+            isBind bindMfv && isStreamReadCall readMfv && not (isVariableUsed v body)
             ->
             acc.Add (readCall.Range, readMfv.DisplayName)
 
@@ -63,19 +72,15 @@ module StreamReadAnalyzer =
 
     let rec walkDeclaration (acc : ResizeArray<range * string>) (decl : FSharpImplementationFileDeclaration) =
         match decl with
-        | FSharpImplementationFileDeclaration.Entity (_, subDecls) ->
-            subDecls |> List.iter (walkDeclaration acc)
-        | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (_, _, expr) ->
-            findIgnoredReads expr acc
-        | FSharpImplementationFileDeclaration.InitAction expr ->
-            findIgnoredReads expr acc
+        | FSharpImplementationFileDeclaration.Entity (_, subDecls) -> subDecls |> List.iter (walkDeclaration acc)
+        | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (_, _, expr) -> findIgnoredReads expr acc
+        | FSharpImplementationFileDeclaration.InitAction expr -> findIgnoredReads expr acc
 
     let analyze (checkFileResults : FSharpCheckFileResults) =
         let violations = ResizeArray<range * string> ()
 
         match checkFileResults.ImplementationFile with
-        | Some implFile ->
-            implFile.Declarations |> List.iter (walkDeclaration violations)
+        | Some implFile -> implFile.Declarations |> List.iter (walkDeclaration violations)
         | None -> ()
 
         violations
