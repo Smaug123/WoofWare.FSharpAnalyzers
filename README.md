@@ -178,7 +178,7 @@ let simpleAsync (x : Async<int>) = async { return! x }
 let simpleAsync (x : Async<int>) = x
 ```
 
-They're not *quite* the same, because the `return!` phrasing can involves a call to `builder.Delay` and/or `builder.Run`, but I claim that this is a baroque and needlessly clever way to phrase that.
+They're not *quite* the same, because the `return!` phrasing can involve a call to `builder.Delay` and/or `builder.Run`, but I claim that this is a baroque and needlessly clever way to phrase that.
 If you genuinely need the `Delay` behavior for laziness, consider making this explicit with a function or documenting why the indirection is necessary.
 
 # Licence
