@@ -82,27 +82,6 @@ module EarlyReturnAnalyzer =
                 // General Call node - explicitly recurse into object and arguments
                 objOpt |> Option.iter (loop depth)
                 args |> List.iter (loop depth)
-            | Application (Lambda (_, bodyExpr), _, args) ->
-                // Application of a lambda - this might be starting a new CE scope
-                // Check if the lambda body contains builder calls (indicating a nested CE)
-                let hasNestedCE =
-                    let rec checkExpr e =
-                        match e with
-                        | Call (Some _, mfv, _, _, _) ->
-                            match mfv.ApparentEnclosingEntity |> Option.bind (fun ent -> ent.TryFullName) with
-                            | Some name when builderMatches name -> true
-                            | _ -> e.ImmediateSubExpressions |> Seq.exists checkExpr
-                        | _ -> e.ImmediateSubExpressions |> Seq.exists checkExpr
-
-                    checkExpr bodyExpr
-
-                if hasNestedCE && depth > 0 then
-                    // This is a nested CE, don't recurse into it
-                    ()
-                else
-                    // Not nested or we're at depth 0, recurse
-                    loop (depth + 1) bodyExpr
-                    args |> List.iter (loop depth)
             | _ -> current.ImmediateSubExpressions |> Seq.iter (loop depth)
 
         loop 0 expr
@@ -146,7 +125,6 @@ module EarlyReturnAnalyzer =
             // Also look for TryFinally: the finally block runs even if the try block returns
             elif isBuilderMethod "TryFinally" mfv && args.Length = 2 then
                 let body = args.[0]
-                let finallyBlock = args.[1]
 
                 // Returns in the body are not in tail position because finally runs after
                 match objOpt with

@@ -105,6 +105,8 @@ Notice that the initial `if` branch has *not* caused any kind of short-circuitin
 
 This analyzer highlights those non-terminal `return` calls so you can restructure the logic using explicit `if/else` or `match` patterns that clearly indicate what happens in every branch.
 
+(GPT-5 wanted me to clarify this point, although I think nobody would expect different behaviour: we *don't* flag `return` statements after a `use` call, even though disposal is code that runs after the `return` statement. Leaving the scope by any means, including a `return`, should intuitively trigger the disposal; which is indeed what happens.)
+
 ## ThrowingInDisposeAnalyzer
 
 Bans throwing in a `Dispose` implementation.
