@@ -5,6 +5,9 @@ A set of F# source analyzers, using the [Ionide analyzer SDK](https://github.com
 They are modelled on the [G-Research analyzers](https://github.com/G-Research/fsharp-analyzers/), but are much more opinionated.
 They're intended for my personal use.
 
+If you find false negatives or false positives, please do raise GitHub issues!
+(Though I reserve the right just to say I'm happy with the status quo.)
+
 # Analyzers
 
 ## MissingCancellationTokenAnalyzer
@@ -76,9 +79,6 @@ The analyzer flags these specific patterns where the return value is discarded:
 
 1. **Piping to `ignore`**: `stream.Read(...) |> ignore`
 2. **Assignment to underscore**: `let _ = stream.Read(...)`
-3. **Sequential statement**: When `stream.Read(...)` appears as a statement where the result is not used
-
-**Note**: The analyzer currently only detects these patterns in straightforward code. Complex cases like discarding values inside `task{}` computation expressions may not be detected yet.
 
 ## TaskCompletionSourceAnalyzer
 
