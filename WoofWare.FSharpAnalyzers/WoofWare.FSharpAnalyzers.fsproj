@@ -30,6 +30,7 @@
     <Compile Include="MissingCancellationTokenAnalyzer.fs" />
     <Compile Include="ReferenceEqualsAnalyzer.fs" />
     <Compile Include="ReturnBangOnlyAnalyzer.fs" />
+    <Compile Include="SuppressThrowingGenericAnalyzer.fs" />
     <Compile Include="TaskCompletionSourceAnalyzer.fs" />
     <Compile Include="ThrowingInDisposeAnalyzer.fs" />
     <None Include="..\README.md">
