@@ -27,3 +27,15 @@ let testInlineCall () =
         let! _ = Task.FromResult(3.14).ConfigureAwait (ConfigureAwaitOptions.SuppressThrowing)
         return ()
     }
+
+let testOptionsVariable () =
+    task {
+        let opts =
+            ConfigureAwaitOptions.SuppressThrowing
+            ||| ConfigureAwaitOptions.ContinueOnCapturedContext
+
+        let t = Task.FromResult 99
+
+        let! _ = t.ConfigureAwait opts
+        return ()
+    }
