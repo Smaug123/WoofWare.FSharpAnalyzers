@@ -13,52 +13,22 @@ module SuppressThrowingGenericAnalyzer =
     [<Literal>]
     let Code = "WOOF-SUPPRESS-THROWING-GENERIC"
 
-    let tryGetTextInRange (sourceText : ISourceText) (range : range) : string option =
-        try
-            let startLine = range.StartLine - 1
-            let endLine = range.EndLine - 1
+    /// Check if a constant value represents ConfigureAwaitOptions with the SuppressThrowing flag set.
+    /// ConfigureAwaitOptions.SuppressThrowing has value 2, so we check if bit 1 is set (value & 2 != 0).
+    let isConfigureAwaitOptionsWithSuppressThrowing (constValue : obj) (ty : FSharpType) : bool =
+        ty.TypeDefinition.TryFullName = Some "System.Threading.Tasks.ConfigureAwaitOptions"
+        && match constValue with
+           | :? int as value -> (value &&& 2) <> 0 // Check if SuppressThrowing bit is set
+           | _ -> false
 
-            let text =
-                if startLine = endLine then
-                    let line = sourceText.GetLineString startLine
-                    line.Substring (range.StartColumn, range.EndColumn - range.StartColumn)
-                else
-                    let lines = ResizeArray<string> ()
-
-                    for i in startLine..endLine do
-                        let line = sourceText.GetLineString i
-
-                        let trimmedLine =
-                            if i = startLine then line.Substring range.StartColumn
-                            elif i = endLine then line.Substring (0, range.EndColumn)
-                            else line
-
-                        lines.Add trimmedLine
-
-                    System.String.Join ("\n", lines)
-
-            Some text
-        with _ ->
-            None
-
-    /// Check if an expression contains ConfigureAwaitOptions.SuppressThrowing by examining source text or the defining value.
-    let containsSuppressThrowing (sourceText : ISourceText) (expr : FSharpExpr) : bool =
-        let rec check (e : FSharpExpr) =
-            match e with
-            | Value v ->
-                match v.SignatureLocation with
-                | Some signatureRange ->
-                    let subText = sourceText.GetSubTextFromRange signatureRange
-                    subText.Contains "SuppressThrowing"
-                | None ->
-                    tryGetTextInRange sourceText e.Range
-                    |> Option.exists (fun t -> t.Contains "SuppressThrowing")
-            | _ ->
-                match tryGetTextInRange sourceText e.Range with
-                | Some text when text.Contains "SuppressThrowing" -> true
-                | _ -> e.ImmediateSubExpressions |> Seq.exists check
-
-        check expr
+    /// Check if an expression contains ConfigureAwaitOptions.SuppressThrowing by examining the typed AST.
+    /// ConfigureAwaitOptions enum values are represented as Const expressions with their numeric values.
+    let rec containsSuppressThrowing (expr : FSharpExpr) : bool =
+        match expr with
+        | Const (value, ty) when isConfigureAwaitOptionsWithSuppressThrowing value ty -> true
+        | _ ->
+            // Recursively check subexpressions (handles nested expressions)
+            expr.ImmediateSubExpressions |> Seq.exists containsSuppressThrowing
 
     /// Check if a type is a generic Task<T>
     let isGenericTaskType (fsharpType : FSharpType) : bool =
@@ -73,19 +43,19 @@ module SuppressThrowingGenericAnalyzer =
         else
             false
 
-    let analyze (sourceText : ISourceText) (typedTree : FSharpImplementationFileContents) =
+    let analyze (_ : ISourceText) (typedTree : FSharpImplementationFileContents) =
         let violations = ResizeArray<range> ()
         let bindingsWithSuppress = HashSet<FSharpMemberOrFunctionOrValue> ()
 
         let walker =
             { new TypedTreeCollectorBase() with
                 override _.WalkLet (binding : FSharpMemberOrFunctionOrValue) (rhs : FSharpExpr) _body =
-                    if containsSuppressThrowing sourceText rhs then
+                    if containsSuppressThrowing rhs then
                         bindingsWithSuppress.Add binding |> ignore
 
                 override _.WalkLetRec (bindings : (FSharpMemberOrFunctionOrValue * FSharpExpr) list) _body =
                     for binding, rhs in bindings do
-                        if containsSuppressThrowing sourceText rhs then
+                        if containsSuppressThrowing rhs then
                             bindingsWithSuppress.Add binding |> ignore
 
                 override _.WalkCall
@@ -105,7 +75,7 @@ module SuppressThrowingGenericAnalyzer =
                             let hasSuppressThrowing =
                                 args
                                 |> List.exists (fun arg ->
-                                    containsSuppressThrowing sourceText arg
+                                    containsSuppressThrowing arg
                                     || (
                                         match arg with
                                         | Value v -> bindingsWithSuppress.Contains v

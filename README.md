@@ -53,6 +53,10 @@ do! (t :> Task).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing)
 
 This analyzer mirrors the C# analyzer [CA2261](https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/quality-rules/ca2261), surfacing the error at build time rather than run time.
 
+### Limitations
+
+We don't try hard to follow e.g. options defined through a `let`-binding, so false negatives are possible.
+
 ## ReferenceEqualsAnalyzer
 
 Bans the use of `Object.ReferenceEquals`.
