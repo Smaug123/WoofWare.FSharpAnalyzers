@@ -90,8 +90,14 @@ module EarlyReturnAnalyzer =
 
     let isNonTrivialContinuation (expr : FSharpExpr) =
         // Check if this is not just a Zero call (which represents an empty continuation)
+        // GPT-5 was concerned that some builders may emit Delay (fun () -> Zero()) instead of just Zero()
         match expr with
         | Call (Some _, mfv, _, _, _) when isBuilderMethod "Zero" mfv -> false
+        // Handle Delay (fun () -> Zero()) pattern
+        | Call (Some _, mfv, _, _, [ Lambda (_, Call (Some _, innerMfv, _, _, _)) ]) when
+            isBuilderMethod "Delay" mfv && isBuilderMethod "Zero" innerMfv
+            ->
+            false
         | _ -> true
 
     type Walker (violations : HashSet<range>) =
