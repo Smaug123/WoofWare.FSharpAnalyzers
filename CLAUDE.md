@@ -96,3 +96,7 @@ Tests use a reflection-based discovery system:
 ### Version Management
 
 The project uses Nerdbank.GitVersioning for version management (see `version.json`), and the pipeline releases a new version automatically on every commit to `main`.
+
+## Project-specific information
+
+* The base `TypedTreeCollectorBase()` class has no-op defaults for all its members; it's fine to not call through to the base class when overriding them.
