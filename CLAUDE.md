@@ -100,3 +100,4 @@ The project uses Nerdbank.GitVersioning for version management (see `version.jso
 ## Project-specific information
 
 * The base `TypedTreeCollectorBase()` class has no-op defaults for all its members; it's fine to not call through to the base class when overriding them.
+* You can obtain the TAST for some given F# code by using the explicit test `Utils.getTast`, first replacing the string in that test.
