@@ -41,6 +41,25 @@ let referenceEquals<'a when 'a : not struct> (x : 'a) (y : 'a) : bool =
 
 This prevents both issues: the `not struct` constraint prevents value types from being passed, and the type parameter `'a` ensures both arguments are the same type.
 
+## StreamReadAnalyzer
+
+Detects calls to `Stream.Read` and `Stream.ReadAsync` where the return value may not be properly checked.
+
+Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) `fsharpanalyzer: ignore-line WOOF-STREAM-READ` to suppress the analyzer.
+
+### Rationale
+
+`Stream.Read` and `Stream.ReadAsync` are not guaranteed to read the requested number of bytes. They may return fewer bytes than requested for various reasons:
+- End of stream is reached
+- Network conditions (for network streams)
+- Implementation-specific buffering
+
+This can lead to subtle bugs where code assumes a full buffer was read when only partial data was actually received. Always check the return value to determine how many bytes were actually read.
+
+If you need to read an exact number of bytes and throw if fewer are available, use `Stream.ReadExactly` or `Stream.ReadExactlyAsync` instead (available in .NET 7+).
+
+**Note**: This analyzer takes a conservative approach and flags all `Stream.Read` and `Stream.ReadAsync` calls. If you have verified that the return value check is not needed in a specific case (e.g., when you don't care about reading the full buffer), use the suppression comment.
+
 ## TaskCompletionSourceAnalyzer
 
 Requires `TaskCompletionSource<T>` to be created with `TaskCreationOptions.RunContinuationsAsynchronously`.
