@@ -55,7 +55,7 @@ This prevents both issues: the `not struct` constraint prevents value types from
 
 ## StreamReadAnalyzer
 
-Detects calls to `Stream.Read` and `Stream.ReadAsync` where the return value may not be properly checked.
+Detects calls to `Stream.Read` and `Stream.ReadAsync` where the return value is explicitly ignored.
 
 Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) `fsharpanalyzer: ignore-line WOOF-STREAM-READ` to suppress the analyzer.
 
@@ -70,7 +70,15 @@ This can lead to subtle bugs where code assumes a full buffer was read when only
 
 If you need to read an exact number of bytes and throw if fewer are available, use `Stream.ReadExactly` or `Stream.ReadExactlyAsync` instead (available in .NET 7+).
 
-**Note**: This analyzer takes a conservative approach and flags all `Stream.Read` and `Stream.ReadAsync` calls. If you have verified that the return value check is not needed in a specific case (e.g., when you don't care about reading the full buffer), use the suppression comment.
+### What this analyzer detects
+
+The analyzer flags these specific patterns where the return value is discarded:
+
+1. **Piping to `ignore`**: `stream.Read(...) |> ignore`
+2. **Assignment to underscore**: `let _ = stream.Read(...)`
+3. **Sequential statement**: When `stream.Read(...)` appears as a statement where the result is not used
+
+**Note**: The analyzer currently only detects these patterns in straightforward code. Complex cases like discarding values inside `task{}` computation expressions may not be detected yet.
 
 ## TaskCompletionSourceAnalyzer
 

@@ -1,0 +1,3 @@
+WOOF-STREAM-READ | Warning | (7,4--7,42) | Call to 'Read' without checking the return value. 'Read' may return fewer bytes than requested. Always check the return value to ensure all data was read.
+WOOF-STREAM-READ | Warning | (12,4--12,36) | Call to 'Read' without checking the return value. 'Read' may return fewer bytes than requested. Always check the return value to ensure all data was read.
+WOOF-STREAM-READ | Warning | (17,12--17,50) | Call to 'Read' without checking the return value. 'Read' may return fewer bytes than requested. Always check the return value to ensure all data was read.

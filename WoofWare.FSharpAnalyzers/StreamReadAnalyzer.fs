@@ -27,30 +27,55 @@ module StreamReadAnalyzer =
     let isStreamReadCall (mfv : FSharpMemberOrFunctionOrValue) =
         streamReadMethods.Contains mfv.FullName
 
+    let isPipeRight (mfv : FSharpMemberOrFunctionOrValue) =
+        mfv.CompiledName = "op_PipeRight"
+
+    let isBind (mfv : FSharpMemberOrFunctionOrValue) =
+        mfv.CompiledName = "Bind"
+
+    // Walk expression tree to find ignored Stream.Read calls
+    let rec findIgnoredReads (expr : FSharpExpr) (acc : ResizeArray<range * string>) =
+        // Recursively process subexpressions first
+        expr.ImmediateSubExpressions |> Seq.iter (fun e -> findIgnoredReads e acc)
+
+        // Then check this expression for patterns
+        match expr with
+        // Pattern 1: stream.Read(...) |> ignore
+        // This appears as: Call(op_PipeRight, [Call(Stream.Read, ...); Lambda(_, Call(ignore, ...))])
+        | Call (_, pipeRightMfv, _, _, [ Call (_, readMfv, _, _, _) as readCall ; Lambda (_, Call (_, ignoreMfv, _, _, _)) ]) when
+            isPipeRight pipeRightMfv && isStreamReadCall readMfv && isIgnoreFunction ignoreMfv
+            ->
+            acc.Add (readCall.Range, readMfv.DisplayName)
+
+        // Pattern 2: let _ = stream.Read(...)
+        // This appears as: Sequential(Call(Stream.Read, ...), ...)
+        | Sequential (Call (_, readMfv, _, _, _) as readCall, _) when isStreamReadCall readMfv ->
+            acc.Add (readCall.Range, readMfv.DisplayName)
+
+        // Pattern 3: let! _ = stream.ReadAsync(...)
+        // This appears as: Call(Bind, [Call(Stream.ReadAsync, ...); Lambda(_arg1, ...)])
+        | Call (_, bindMfv, _, _, [ Call (_, readMfv, _, _, _) as readCall ; Lambda (v, _) ]) when
+            isBind bindMfv && isStreamReadCall readMfv && (v.DisplayName.StartsWith "_arg" || v.DisplayName = "_")
+            ->
+            acc.Add (readCall.Range, readMfv.DisplayName)
+
+        | _ -> ()
+
+    let rec walkDeclaration (acc : ResizeArray<range * string>) (decl : FSharpImplementationFileDeclaration) =
+        match decl with
+        | FSharpImplementationFileDeclaration.Entity (_, subDecls) ->
+            subDecls |> List.iter (walkDeclaration acc)
+        | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (_, _, expr) ->
+            findIgnoredReads expr acc
+        | FSharpImplementationFileDeclaration.InitAction expr ->
+            findIgnoredReads expr acc
+
     let analyze (checkFileResults : FSharpCheckFileResults) =
         let violations = ResizeArray<range * string> ()
-        let ignoreCalls = HashSet<range> ()
-
-        // First pass: collect all calls to ignore()
-        let collectIgnoreCalls =
-            { new TypedTreeCollectorBase() with
-                override _.WalkCall _ (mfv : FSharpMemberOrFunctionOrValue) _ _ argExprs _ =
-                    if isIgnoreFunction mfv && argExprs.Length = 1 then
-                        ignoreCalls.Add argExprs.[0].Range |> ignore
-            }
-
-        // Second pass: collect Stream.Read calls that are piped to ignore
-        let collectStreamReads =
-            { new TypedTreeCollectorBase() with
-                override _.WalkCall _ (mfv : FSharpMemberOrFunctionOrValue) _ _ _ (m : range) =
-                    if isStreamReadCall mfv && ignoreCalls.Contains m then
-                        violations.Add (m, mfv.DisplayName)
-            }
 
         match checkFileResults.ImplementationFile with
-        | Some typedTree ->
-            walkTast collectIgnoreCalls typedTree
-            walkTast collectStreamReads typedTree
+        | Some implFile ->
+            implFile.Declarations |> List.iter (walkDeclaration violations)
         | None -> ()
 
         violations
