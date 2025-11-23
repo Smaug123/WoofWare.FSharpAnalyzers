@@ -101,7 +101,7 @@ fun () ->
 |> async.Delay
 ```
 
-Notice that the initial `if` branch has *not* caused any kind of short-circuiting; in fact, the first argument to `Combine` has the same value in both branches of the `if`!
+Notice that the initial `if` branch has *not* caused any kind of short-circuiting; in fact, the first argument to `Combine` has the same value (`async.Zero() == async.Return()`) in both branches of the `if`!
 
 This analyzer highlights those non-terminal `return` calls so you can restructure the logic using explicit `if/else` or `match` patterns that clearly indicate what happens in every branch.
 
