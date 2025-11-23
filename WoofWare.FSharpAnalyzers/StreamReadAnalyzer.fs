@@ -24,21 +24,33 @@ module StreamReadAnalyzer =
     let isIgnoreFunction (mfv : FSharpMemberOrFunctionOrValue) =
         mfv.FullName = "Microsoft.FSharp.Core.Operators.ignore"
 
+    let isStreamReadCall (mfv : FSharpMemberOrFunctionOrValue) =
+        streamReadMethods.Contains mfv.FullName
+
     let analyze (checkFileResults : FSharpCheckFileResults) =
         let violations = ResizeArray<range * string> ()
+        let ignoreCalls = HashSet<range> ()
 
-        let walker =
+        // First pass: collect all calls to ignore()
+        let collectIgnoreCalls =
             { new TypedTreeCollectorBase() with
-                override _.WalkCall objOpt (mfv : FSharpMemberOrFunctionOrValue) _typeArgs _args argExprs (m : range) =
-                    // Check if this is a Stream.Read or Stream.ReadAsync call
-                    if streamReadMethods.Contains mfv.FullName then
-                        // For now, just collect all Stream.Read/ReadAsync calls that are piped to ignore
-                        // We'll refine this later
+                override _.WalkCall _ (mfv : FSharpMemberOrFunctionOrValue) _ _ argExprs _ =
+                    if isIgnoreFunction mfv && argExprs.Length = 1 then
+                        ignoreCalls.Add argExprs.[0].Range |> ignore
+            }
+
+        // Second pass: collect Stream.Read calls that are piped to ignore
+        let collectStreamReads =
+            { new TypedTreeCollectorBase() with
+                override _.WalkCall _ (mfv : FSharpMemberOrFunctionOrValue) _ _ _ (m : range) =
+                    if isStreamReadCall mfv && ignoreCalls.Contains m then
                         violations.Add (m, mfv.DisplayName)
             }
 
         match checkFileResults.ImplementationFile with
-        | Some typedTree -> walkTast walker typedTree
+        | Some typedTree ->
+            walkTast collectIgnoreCalls typedTree
+            walkTast collectStreamReads typedTree
         | None -> ()
 
         violations

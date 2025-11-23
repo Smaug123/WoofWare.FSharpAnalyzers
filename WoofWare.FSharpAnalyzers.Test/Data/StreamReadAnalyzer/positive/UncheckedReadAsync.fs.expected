@@ -1,3 +1,0 @@
-WOOF-STREAM-READ | Warning | (9,17--9,60) | Call to 'ReadAsync' without checking the return value. 'ReadAsync' may return fewer bytes than requested. Always check the return value to ensure all data was read.
-WOOF-STREAM-READ | Warning | (16,17--16,56) | Call to 'ReadAsync' without checking the return value. 'ReadAsync' may return fewer bytes than requested. Always check the return value to ensure all data was read.
-WOOF-STREAM-READ | Warning | (23,17--23,60) | Call to 'ReadAsync' without checking the return value. 'ReadAsync' may return fewer bytes than requested. Always check the return value to ensure all data was read.
