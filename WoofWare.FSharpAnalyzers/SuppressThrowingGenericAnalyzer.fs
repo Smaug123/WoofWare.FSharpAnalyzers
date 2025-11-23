@@ -3,7 +3,6 @@ namespace WoofWare.FSharpAnalyzers
 open FSharp.Analyzers.SDK
 open FSharp.Analyzers.SDK.TASTCollecting
 open FSharp.Compiler.Symbols
-open FSharp.Compiler.Syntax
 open FSharp.Compiler.Text
 
 [<RequireQualifiedAccess>]
@@ -12,8 +11,8 @@ module SuppressThrowingGenericAnalyzer =
     [<Literal>]
     let Code = "WOOF-SUPPRESS-THROWING-GENERIC"
 
-    /// Check if an expression contains ConfigureAwaitOptions.SuppressThrowing
-    let rec containsSuppressThrowing (sourceText : ISourceText) (expr : FSharpExpr) : bool =
+    /// Check if an expression contains ConfigureAwaitOptions.SuppressThrowing by examining source text
+    let containsSuppressThrowing (sourceText : ISourceText) (expr : FSharpExpr) : bool =
         try
             let range = expr.Range
             let startLine = range.StartLine - 1
@@ -21,14 +20,28 @@ module SuppressThrowingGenericAnalyzer =
 
             let text =
                 if startLine = endLine then
+                    // Single-line expression: slice by columns
                     let line = sourceText.GetLineString startLine
                     line.Substring (range.StartColumn, range.EndColumn - range.StartColumn)
                 else
-                    // Multi-line expression, get all lines
+                    // Multi-line expression: slice first and last lines by columns
                     let lines = ResizeArray<string> ()
 
                     for i in startLine..endLine do
-                        lines.Add (sourceText.GetLineString i)
+                        let line = sourceText.GetLineString i
+
+                        let trimmedLine =
+                            if i = startLine then
+                                // First line: slice from StartColumn
+                                line.Substring range.StartColumn
+                            elif i = endLine then
+                                // Last line: slice to EndColumn
+                                line.Substring (0, range.EndColumn)
+                            else
+                                // Middle lines: use entire line
+                                line
+
+                        lines.Add trimmedLine
 
                     System.String.Join ("\n", lines)
 
@@ -87,7 +100,7 @@ module SuppressThrowingGenericAnalyzer =
                     "ConfigureAwaitOptions.SuppressThrowing is not supported with Task<TResult> or ValueTask<TResult> "
                     + "as it may lead to returning an invalid TResult. "
                     + "Cast to non-generic Task before calling ConfigureAwait: "
-                    + "((Task)t).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing)"
+                    + "(t :> Task).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing)"
                 Code = Code
                 Severity = Severity.Warning
                 Range = range
