@@ -31,13 +31,14 @@ Prevent [sync-over-async](https://learn.microsoft.com/en-us/archive/msdn-magazin
 
 ## SuppressThrowingGenericAnalyzer
 
-Detects use of `ConfigureAwaitOptions.SuppressThrowing` with generic `Task<TResult>` or `ValueTask<TResult>`.
+Detects use of `ConfigureAwaitOptions.SuppressThrowing` with generic `Task<TResult>`.
+(For some reason, `ValueTask` doesn't accept `ConfigureAwaitOptions`.)
 
 Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-SUPPRESS-THROWING-GENERIC" to suppress the analyzer; but note that Microsoft says this code pattern is always wrong.
 
 ### Rationale
 
-The `ConfigureAwaitOptions.SuppressThrowing` option is not supported by generic `Task<TResult>` or `ValueTask<TResult>` because it can lead to returning an invalid `TResult` when an exception occurs. This is a runtime error that should be caught at build time.
+The `ConfigureAwaitOptions.SuppressThrowing` option is not supported by generic `Task<TResult>` because it can lead to returning an invalid `TResult` when an exception occurs. This is a runtime error that should be caught at build time.
 
 If you need to use `SuppressThrowing`, cast the task to non-generic `Task` first:
 
