@@ -9,14 +9,14 @@ let complexAsync (x : Async<int>) =
         return! async { return doubled }
     }
 
-// Has try-with - should NOT trigger (removed due to TAST complexities)
-// let withTryWith (x : Async<int>) =
-//     async {
-//         try
-//             return! x
-//         with ex ->
-//             return 0
-//     }
+// Has try-with - should NOT trigger
+let withTryWith (x : Async<int>) =
+    async {
+        try
+            return! x
+        with ex ->
+            return 0
+    }
 
 // Has if-then-else - should NOT trigger
 let withConditional (condition : bool) (x : Async<int>) (y : Async<int>) =

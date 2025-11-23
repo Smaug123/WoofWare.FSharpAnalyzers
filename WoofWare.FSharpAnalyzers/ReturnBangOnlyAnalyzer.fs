@@ -88,7 +88,7 @@ module ReturnBangOnlyAnalyzer =
                     || isBuilderMethod "For" mfv
                     || isBuilderMethod "While" mfv
                     || isBuilderMethod "Using" mfv
-                    || isBuilderMethod "Return" mfv // Also exclude regular return
+                    || isBuilderMethod "Return" mfv  // Also exclude regular return
                     ->
                     foundOtherOp <- true
                 // Let bindings and other control flow also mean it's not "only return!"
@@ -107,26 +107,59 @@ module ReturnBangOnlyAnalyzer =
     let analyze (checkFileResults : FSharpCheckFileResults) =
         let violations = ResizeArray<range> ()
 
-        let walker =
+        // First, collect all Delay calls that would be violations
+        let delayCallsToCheck = ResizeArray<range> ()
+
+        let collectDelays =
             { new TypedTreeCollectorBase() with
-                override _.WalkCall
-                    (objOpt : FSharpExpr option)
-                    (mfv : FSharpMemberOrFunctionOrValue)
-                    _
-                    _
-                    (args : FSharpExpr list)
-                    (m : range)
-                    =
-                    // Look for builder.Delay(fun () -> builder.ReturnFrom(x))
+                override _.WalkCall _ mfv _ _ args m =
                     if isBuilderMethod "Delay" mfv then
-                        // Check if the argument to Delay is a lambda containing only ReturnFrom
                         match args with
-                        | [ Lambda (_, body) ] when isOnlyReturnFrom body -> violations.Add m
+                        | [ Lambda (_, body) ] when isOnlyReturnFrom body -> delayCallsToCheck.Add m
                         | _ -> ()
             }
 
         match checkFileResults.ImplementationFile with
-        | Some typedTree -> walkTast walker typedTree
+        | Some typedTree ->
+            walkTast collectDelays typedTree
+
+            // Now check each Delay call to see if it's inside a control flow operation
+            // by walking the tree again and looking for control flow that contains these Delays
+            let controlFlowRanges = ResizeArray<range> ()
+
+            let collectControlFlow =
+                { new TypedTreeCollectorBase() with
+                    override _.WalkCall _ mfv _ _ args m =
+                        if
+                            isBuilderMethod "TryWith" mfv
+                            || isBuilderMethod "TryFinally" mfv
+                            || isBuilderMethod "For" mfv
+                            || isBuilderMethod "While" mfv
+                            || isBuilderMethod "Using" mfv
+                        then
+                            controlFlowRanges.Add m
+                }
+
+            walkTast collectControlFlow typedTree
+
+            // A Delay is inside control flow if its range is contained within a control flow range
+            for delayRange in delayCallsToCheck do
+                let isInside =
+                    controlFlowRanges
+                    |> Seq.exists (fun cfRange ->
+                        // cfRange contains delayRange if:
+                        // cfRange starts before or at the same position as delayRange
+                        // AND cfRange ends after or at the same position as delayRange
+                        (cfRange.StartLine < delayRange.StartLine
+                         || (cfRange.StartLine = delayRange.StartLine
+                             && cfRange.StartColumn <= delayRange.StartColumn))
+                        && (cfRange.EndLine > delayRange.EndLine
+                            || (cfRange.EndLine = delayRange.EndLine
+                                && cfRange.EndColumn >= delayRange.EndColumn))
+                    )
+
+                if not isInside then
+                    violations.Add delayRange
         | None -> ()
 
         violations
