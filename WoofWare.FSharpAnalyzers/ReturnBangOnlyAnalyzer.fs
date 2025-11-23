@@ -49,12 +49,6 @@ module ReturnBangOnlyAnalyzer =
             "ArrayBuilder"
         ]
 
-    let tryGetFullName (typ : FSharpType) =
-        if typ.HasTypeDefinition then
-            typ.TypeDefinition.TryFullName
-        else
-            None
-
     let builderMatches (name : string) =
         knownBuilderNames.Contains name || builderSuffixes |> List.exists name.EndsWith
 
@@ -136,6 +130,8 @@ module ReturnBangOnlyAnalyzer =
                             || isBuilderMethod "For" mfv
                             || isBuilderMethod "While" mfv
                             || isBuilderMethod "Using" mfv
+                            || isBuilderMethod "Combine" mfv
+                            || isBuilderMethod "Bind" mfv
                         then
                             controlFlowRanges.Add m
                 }
