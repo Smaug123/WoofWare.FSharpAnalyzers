@@ -21,7 +21,7 @@ Prevent [sync-over-async](https://learn.microsoft.com/en-us/archive/msdn-magazin
 
 Detects use of `ConfigureAwaitOptions.SuppressThrowing` with generic `Task<TResult>` or `ValueTask<TResult>`.
 
-Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-SUPPRESS-THROWING-GENERIC" to suppress the analyzer.
+Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-SUPPRESS-THROWING-GENERIC" to suppress the analyzer; but note that Microsoft says this code pattern is always wrong.
 
 ### Rationale
 
