@@ -11,10 +11,7 @@ module Utils =
         task {
             let code =
                 """module Foo
-let readPiped (stream: System.IO.Stream) =
-      let buffer = Array.zeroCreate 1024
-      stream.Read(buffer, 0, buffer.Length) |> ignore
-      buffer
+let simpleAsync (x : Async<int>) = async { return! x }
 """
 
             let! options = ProjectOptions.get.Force ()
