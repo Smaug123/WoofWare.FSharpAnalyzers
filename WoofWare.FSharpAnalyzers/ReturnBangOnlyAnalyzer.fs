@@ -88,6 +88,9 @@ module ReturnBangOnlyAnalyzer =
                 // Let bindings and other control flow also mean it's not "only return!"
                 | Let _ -> foundOtherOp <- true
                 | IfThenElse _ -> foundOtherOp <- true
+                // Pattern matching is control flow
+                | DecisionTree _ -> foundOtherOp <- true
+                | DecisionTreeSuccess _ -> foundOtherOp <- true
                 // Sequential means there are multiple operations
                 | Sequential _ -> foundOtherOp <- true
                 // Debug points and other wrappers - recurse
