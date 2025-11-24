@@ -114,6 +114,7 @@ module ValueTaskAwaitAnalyzer =
         (awaitInfo : Dictionary<FSharpMemberOrFunctionOrValue, ResizeArray<AwaitInfo>>)
         (processedInLoop : HashSet<range>)
         (inLoop : bool)
+        (loopBodyBindings : Dictionary<FSharpMemberOrFunctionOrValue, unit> option)
         (expr : FSharpExpr)
         =
         match expr with
@@ -127,33 +128,52 @@ module ValueTaskAwaitAnalyzer =
                 | Some awaitedExpr ->
                     match tryGetValueFromExpr awaitedExpr with
                     | Some v when valueTaskBindings.ContainsKey v ->
-                        let info =
-                            {
-                                Range = expr.Range
-                                Line = expr.Range.StartLine
-                            }
+                        // Check if this ValueTask is defined inside the current loop body
+                        let definedInLoop =
+                            loopBodyBindings
+                            |> Option.map (fun bindings -> bindings.ContainsKey v)
+                            |> Option.defaultValue false
 
-                        if not (awaitInfo.ContainsKey v) then
-                            awaitInfo.[v] <- ResizeArray<AwaitInfo> ()
+                        // Only flag if the ValueTask is defined outside the loop
+                        if not definedInLoop then
+                            let info =
+                                {
+                                    Range = expr.Range
+                                    Line = expr.Range.StartLine
+                                }
 
-                        // Mark as multiple awaits since it's in a loop
-                        awaitInfo.[v].Add info
-                        awaitInfo.[v].Add info
-                        // Track that we've processed this Bind in a loop
-                        processedInLoop.Add expr.Range |> ignore
+                            if not (awaitInfo.ContainsKey v) then
+                                awaitInfo.[v] <- ResizeArray<AwaitInfo> ()
+
+                            // Mark as multiple awaits since it's in a loop
+                            awaitInfo.[v].Add info
+                            awaitInfo.[v].Add info
+                            // Track that we've processed this Bind in a loop
+                            processedInLoop.Add expr.Range |> ignore
                     | _ -> ()
                 | None -> ()
 
+            // If entering a loop, collect bindings within the loop body
+            let newLoopBodyBindings =
+                if isLoop then
+                    let loopBindings = Dictionary<FSharpMemberOrFunctionOrValue, unit> ()
+                    args |> List.iter (findValueTaskBindings loopBindings)
+                    Some loopBindings
+                else
+                    loopBodyBindings
+
             // Recursively search in arguments, marking if we're entering a loop
             args
-            |> List.iter (findBindsInExpr valueTaskBindings awaitInfo processedInLoop (inLoop || isLoop))
+            |> List.iter (
+                findBindsInExpr valueTaskBindings awaitInfo processedInLoop (inLoop || isLoop) newLoopBodyBindings
+            )
 
             objOpt
-            |> Option.iter (findBindsInExpr valueTaskBindings awaitInfo processedInLoop inLoop)
+            |> Option.iter (findBindsInExpr valueTaskBindings awaitInfo processedInLoop inLoop loopBodyBindings)
         | _ ->
             // Recursively search all sub-expressions
             expr.ImmediateSubExpressions
-            |> Seq.iter (findBindsInExpr valueTaskBindings awaitInfo processedInLoop inLoop)
+            |> Seq.iter (findBindsInExpr valueTaskBindings awaitInfo processedInLoop inLoop loopBodyBindings)
 
     type Walker
         (
@@ -196,8 +216,12 @@ module ValueTaskAwaitAnalyzer =
                     | None -> ()
             // Check if this is a For/While loop - search for Binds inside
             elif isLoopCall mfv then
+                // Collect ValueTask bindings within the loop body
+                let loopBindings = Dictionary<FSharpMemberOrFunctionOrValue, unit> ()
+                args |> List.iter (findValueTaskBindings loopBindings)
+
                 args
-                |> List.iter (findBindsInExpr valueTaskBindings awaitInfo processedInLoop true)
+                |> List.iter (findBindsInExpr valueTaskBindings awaitInfo processedInLoop true (Some loopBindings))
 
     let analyze (typedTree : FSharpImplementationFileContents) =
         let valueTaskBindings = Dictionary<FSharpMemberOrFunctionOrValue, unit> ()
