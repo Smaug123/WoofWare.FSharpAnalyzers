@@ -29,6 +29,7 @@
     <Compile Include="EarlyReturnAnalyzer.fs" />
     <Compile Include="MissingCancellationTokenAnalyzer.fs" />
     <Compile Include="ReferenceEqualsAnalyzer.fs" />
+    <Compile Include="StreamReadAnalyzer.fs" />
     <Compile Include="SuppressThrowingGenericAnalyzer.fs" />
     <Compile Include="TaskCompletionSourceAnalyzer.fs" />
     <Compile Include="ThrowingInDisposeAnalyzer.fs" />
