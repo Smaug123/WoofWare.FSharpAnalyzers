@@ -1,7 +1,7 @@
 module InArgumentControlFlow
 
-// Control flow as the argument to return! - should NOT trigger
-// The control flow (if-then-else) produces a value that return! consumes
+// Control flow as the argument to return! - SHOULD trigger
+// The computation expression adds no value; the control flow could be outside the CE
 
 // If-then-else as argument to return!
 let withIfThenElse (condition : bool) (x : Async<int>) (y : Async<int>) =
