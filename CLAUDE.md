@@ -76,6 +76,8 @@ Tests use a reflection-based discovery system:
 - The test harness automatically finds analyzers by name and invokes their `cliAnalyzer` methods
 - Run the `[<Explicit>]` "Update snapshot" test to regenerate `.expected` files when analyzer output changes
 
+Prefer to run the explicit snapshot update "test" and then check whether it did the right thing, rather than to come up with the expected snapshot output yourself.
+
 ### Project Dependencies
 
 - Main project (`WoofWare.FSharpAnalyzers.fsproj`) targets `net8.0` and references `FSharp.Analyzers.SDK`
@@ -101,3 +103,8 @@ The project uses Nerdbank.GitVersioning for version management (see `version.jso
 
 * The base `TypedTreeCollectorBase()` class has no-op defaults for all its members; it's fine to not call through to the base class when overriding them.
 * You can obtain the TAST for some given F# code by using the explicit test `Utils.getTast`, first replacing the string in that test. If you use this, please revert it to its state on `main` afterwards.
+
+# Hooks that run when you make a change
+
+Whenever you use the `Edit` or `Write` tools, your proposed change is sent to another LLM to check whether you're on the right path (basically you're pair-programming).
+Please precede every Write or Edit tool call with a short summary of why you're making the change you're making.

@@ -33,6 +33,7 @@
     <Compile Include="SuppressThrowingGenericAnalyzer.fs" />
     <Compile Include="TaskCompletionSourceAnalyzer.fs" />
     <Compile Include="ThrowingInDisposeAnalyzer.fs" />
+    <Compile Include="ValueTaskAwaitAnalyzer.fs" />
     <None Include="..\README.md">
       <Pack>True</Pack>
       <PackagePath>\</PackagePath>
