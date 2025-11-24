@@ -53,7 +53,9 @@ module ReturnBangOnlyAnalyzer =
         knownBuilderNames.Contains name || builderSuffixes |> List.exists name.EndsWith
 
     let isBuilderMethod (name : string) (mfv : FSharpMemberOrFunctionOrValue) =
-        if mfv.CompiledName <> name then
+        // Use DisplayName instead of CompiledName because some builders (like TaskBuilderBase)
+        // prefix the method name with the class name in CompiledName
+        if mfv.DisplayName <> name then
             false
         else
             mfv.ApparentEnclosingEntity
