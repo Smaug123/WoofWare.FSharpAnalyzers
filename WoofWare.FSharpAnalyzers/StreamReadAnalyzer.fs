@@ -26,7 +26,7 @@ module StreamReadAnalyzer =
     let isBind (mfv : FSharpMemberOrFunctionOrValue) =
         mfv.DisplayName = "Bind"
         || mfv.CompiledName = "Bind"
-        || mfv.CompiledName.EndsWith (".Bind")
+        || mfv.CompiledName.EndsWith (".Bind", System.StringComparison.Ordinal)
 
     // Check if a variable is used in an expression
     let rec isVariableUsed (targetVar : FSharpMemberOrFunctionOrValue) (expr : FSharpExpr) : bool =
