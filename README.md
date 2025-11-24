@@ -105,8 +105,10 @@ If you need to read an exact number of bytes and throw if fewer are available, u
 
 The analyzer flags these specific patterns where the return value is discarded:
 
-1. **Piping to `ignore`**: `stream.Read(...) |> ignore`
-2. **Assignment to underscore**: `let _ = stream.Read(...)`
+1. **Piping to `ignore`**: `stream.Read(...) |> ignore` or `stream.ReadAsync(...) |> ignore`
+2. **Calling `ignore` directly**: `ignore (stream.Read(...))` or `ignore (stream.ReadAsync(...))`
+3. **Assignment to underscore (synchronous)**: `let _ = stream.Read(...)`
+4. **Unused binding in computation expressions**: `let! _ = stream.ReadAsync(...)` or any `let!` binding where the result is not used
 
 ## TaskCompletionSourceAnalyzer
 

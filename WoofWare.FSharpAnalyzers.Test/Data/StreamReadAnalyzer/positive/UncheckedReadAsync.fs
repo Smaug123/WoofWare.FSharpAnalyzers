@@ -38,3 +38,17 @@ let multipleIgnoredReadAsync (stream : Stream) =
         let! _ = stream.ReadAsync (buffer, 512, 512)
         return buffer
     }
+
+let readAsyncWithIgnoreFunction (stream : Stream) =
+    task {
+        let buffer = Array.zeroCreate 1024
+        ignore (stream.ReadAsync (buffer, 0, buffer.Length))
+        return buffer
+    }
+
+let readAsyncWithMemoryAndIgnoreFunction (stream : Stream) =
+    task {
+        let buffer = Array.zeroCreate 1024
+        ignore (stream.ReadAsync (System.Memory buffer))
+        return buffer
+    }

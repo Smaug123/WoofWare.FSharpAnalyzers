@@ -68,6 +68,13 @@ module StreamReadAnalyzer =
             ->
             acc.Add (readCall.Range, readMfv.DisplayName)
 
+        // Pattern 4: ignore (stream.Read(...))
+        // This appears as: Call(ignore, [Call(Stream.Read, ...)])
+        | Call (_, ignoreMfv, _, _, [ Call (_, readMfv, _, _, _) as readCall ]) when
+            isIgnoreFunction ignoreMfv && isStreamReadCall readMfv
+            ->
+            acc.Add (readCall.Range, readMfv.DisplayName)
+
         | _ -> ()
 
     let rec walkDeclaration (acc : ResizeArray<range * string>) (decl : FSharpImplementationFileDeclaration) =
