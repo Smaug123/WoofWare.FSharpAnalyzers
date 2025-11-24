@@ -1,6 +1,5 @@
 namespace WoofWare.FSharpAnalyzers
 
-open System.Collections.Generic
 open FSharp.Analyzers.SDK
 open FSharp.Analyzers.SDK.TASTCollecting
 open FSharp.Compiler.CodeAnalysis
@@ -42,7 +41,7 @@ module StreamReadAnalyzer =
 
         // Then check this expression for patterns
         match expr with
-        // Pattern 1: stream.Read(...) |> ignore
+        // Pattern 1a: stream.Read(...) |> ignore (with lambda wrapper)
         // This appears as: Call(op_PipeRight, [Call(Stream.Read, ...); Lambda(_, Call(ignore, ...))])
         | Call (_,
                 pipeRightMfv,
@@ -55,8 +54,25 @@ module StreamReadAnalyzer =
             ->
             acc.Add (readCall.Range, readMfv.DisplayName)
 
-        // Pattern 2: let _ = stream.Read(...)
-        // This appears as: Sequential(Call(Stream.Read, ...), ...)
+        // Pattern 1b: stream.Read(...) |> ignore (without lambda wrapper)
+        // This appears as: Call(op_PipeRight, [Call(Stream.Read, ...); Value(ignore)])
+        // or Call(op_PipeRight, [Call(Stream.Read, ...); Call(ignore, [])])
+        | Call (_, pipeRightMfv, _, _, [ Call (_, readMfv, _, _, _) as readCall ; Value ignoreMfv ]) when
+            isPipeRight pipeRightMfv
+            && isStreamReadCall readMfv
+            && isIgnoreFunction ignoreMfv
+            ->
+            acc.Add (readCall.Range, readMfv.DisplayName)
+
+        // Pattern 2a: let _ = stream.Read(...)
+        // This appears as: Let((v, Call(Stream.Read, ...), debugPoint), body) where v is unused
+        | Let ((v, (Call (_, readMfv, _, _, _) as readCall), _debugPoint), body) when
+            isStreamReadCall readMfv && not (isVariableUsed v body)
+            ->
+            acc.Add (readCall.Range, readMfv.DisplayName)
+
+        // Pattern 2b: let _ = stream.Read(...) (alternative representation)
+        // This appears as: Sequential(Call(Stream.Read, ...), ...) when optimized
         | Sequential (Call (_, readMfv, _, _, _) as readCall, _) when isStreamReadCall readMfv ->
             acc.Add (readCall.Range, readMfv.DisplayName)
 
