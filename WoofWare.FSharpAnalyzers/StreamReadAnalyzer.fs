@@ -1,7 +1,6 @@
 namespace WoofWare.FSharpAnalyzers
 
 open FSharp.Analyzers.SDK
-open FSharp.Analyzers.SDK.TASTCollecting
 open FSharp.Compiler.CodeAnalysis
 open FSharp.Compiler.Symbols
 open FSharp.Compiler.Symbols.FSharpExprPatterns
