@@ -261,30 +261,35 @@ module ValueTaskAwaitAnalyzer =
             let isViolation = hasLoopAwait || awaits.Count > 1
 
             if isViolation then
-                // Get unique line numbers and sort them
-                let uniqueLines =
-                    awaits
-                    |> Seq.map (fun a -> a.Line)
-                    |> Seq.distinct
-                    |> Seq.sort
-                    |> Seq.map string
-                    |> String.concat ", "
-
-                let lineCount = awaits |> Seq.map (fun a -> a.Line) |> Seq.distinct |> Seq.length
-
-                // Report at the location of the await (first one for loop case, second one for multiple awaits)
-                let reportRange = if hasLoopAwait then awaits.[0].Range else awaits.[1].Range
+                // Report at the location of the await (first one for loop case, last one for multiple awaits)
+                let reportRange =
+                    if hasLoopAwait then
+                        awaits.[0].Range
+                    else
+                        awaits.[awaits.Count - 1].Range
 
                 let message =
-                    let lineWord = if lineCount = 1 then "line" else "lines"
-
                     if hasLoopAwait then
+                        // Get unique line numbers and sort them for loop case
+                        let uniqueLines =
+                            awaits
+                            |> Seq.map (fun a -> a.Line)
+                            |> Seq.distinct
+                            |> Seq.sort
+                            |> Seq.map string
+                            |> String.concat ", "
+
+                        let lineCount = awaits |> Seq.map (fun a -> a.Line) |> Seq.distinct |> Seq.length
+                        let lineWord = if lineCount = 1 then "line" else "lines"
 
                         $"ValueTask '{varName}' is awaited inside a loop at {lineWord} {uniqueLines}. "
                         + "ValueTask should only be awaited once as subsequent awaits produce undefined behavior. "
                         + "Consider using Task instead or restructure to await only once."
                     else
-                        $"ValueTask '{varName}' is awaited multiple times at {lineWord} {uniqueLines}. "
+                        // For non-loop case, only report the last await's line
+                        let lastLine = awaits.[awaits.Count - 1].Line
+
+                        $"ValueTask '{varName}' is awaited multiple times at line {lastLine}. "
                         + "ValueTask should only be awaited once as subsequent awaits produce undefined behavior. "
                         + "Consider using Task instead or restructure to await only once."
 
