@@ -88,6 +88,15 @@ module ValueTaskAwaitAnalyzer =
             IsInLoop : bool
         }
 
+    /// Check if an expression evaluates to a ValueTask by examining its type
+    let rec isValueTaskExpr (expr : FSharpExpr) : bool =
+        match expr with
+        | Value v -> isValueTaskType v.FullType
+        | Coerce (_, innerExpr) -> isValueTaskExpr innerExpr
+        | _ ->
+            // For other expressions, check the expression's type directly
+            isValueTaskType expr.Type
+
     /// Recursively walk an expression to find all ValueTask bindings
     let rec findValueTaskBindings (bindings : Dictionary<FSharpMemberOrFunctionOrValue, unit>) (expr : FSharpExpr) =
         match expr with
@@ -126,9 +135,9 @@ module ValueTaskAwaitAnalyzer =
             // Check if this is a Bind/ReturnFrom inside a loop
             if inLoop && isBindOrReturnFrom mfv then
                 match tryGetAwaitedValue args with
-                | Some awaitedExpr ->
+                | Some awaitedExpr when isValueTaskExpr awaitedExpr ->
                     match tryGetValueFromExpr awaitedExpr with
-                    | Some v when valueTaskBindings.ContainsKey v ->
+                    | Some v ->
                         // Check if this ValueTask is defined inside the current loop body
                         let definedInLoop =
                             loopBodyBindings
@@ -151,8 +160,8 @@ module ValueTaskAwaitAnalyzer =
                             awaitInfo.[v].Add info
                             // Track that we've processed this Bind in a loop
                             processedInLoop.Add expr.Range |> ignore
-                    | _ -> ()
-                | None -> ()
+                    | None -> ()
+                | _ -> ()
 
             // If entering a loop, collect bindings within the loop body
             let newLoopBodyBindings =
@@ -198,11 +207,11 @@ module ValueTaskAwaitAnalyzer =
                 // Skip if we already processed this in a loop
                 if not (processedInLoop.Contains m) then
                     match tryGetAwaitedValue args with
-                    | Some awaitedExpr ->
+                    | Some awaitedExpr when isValueTaskExpr awaitedExpr ->
                         // Try to get the value being awaited
                         match tryGetValueFromExpr awaitedExpr with
-                        | Some v when valueTaskBindings.ContainsKey v ->
-                            // This is an await of a tracked ValueTask
+                        | Some v ->
+                            // This is an await of a ValueTask
                             let info =
                                 {
                                     Range = m
@@ -214,8 +223,8 @@ module ValueTaskAwaitAnalyzer =
                                 awaitInfo.[v] <- ResizeArray<AwaitInfo> ()
 
                             awaitInfo.[v].Add info
-                        | _ -> ()
-                    | None -> ()
+                        | None -> ()
+                    | _ -> ()
             // Check if this is a For/While loop - search for Binds inside
             elif isLoopCall mfv then
                 // Collect ValueTask bindings within the loop body
@@ -277,13 +286,20 @@ module ValueTaskAwaitAnalyzer =
                         // Get unique line numbers and sort them for loop case
                         let uniqueLines =
                             awaits
+                            |> Seq.filter (fun a -> a.IsInLoop)
                             |> Seq.map (fun a -> a.Line)
                             |> Seq.distinct
                             |> Seq.sort
                             |> Seq.map string
                             |> String.concat ", "
 
-                        let lineCount = awaits |> Seq.map (fun a -> a.Line) |> Seq.distinct |> Seq.length
+                        let lineCount =
+                            awaits
+                            |> Seq.filter (fun a -> a.IsInLoop)
+                            |> Seq.map (fun a -> a.Line)
+                            |> Seq.distinct
+                            |> Seq.length
+
                         let lineWord = if lineCount = 1 then "line" else "lines"
 
                         $"ValueTask '{varName}' is awaited inside a loop at {lineWord} {uniqueLines}. "
