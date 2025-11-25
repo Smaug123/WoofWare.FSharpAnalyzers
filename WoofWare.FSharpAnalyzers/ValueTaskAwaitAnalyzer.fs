@@ -85,6 +85,7 @@ module ValueTaskAwaitAnalyzer =
         {
             Range : range
             Line : int
+            IsInLoop : bool
         }
 
     /// Recursively walk an expression to find all ValueTask bindings
@@ -140,13 +141,13 @@ module ValueTaskAwaitAnalyzer =
                                 {
                                     Range = expr.Range
                                     Line = expr.Range.StartLine
+                                    IsInLoop = true
                                 }
 
                             if not (awaitInfo.ContainsKey v) then
                                 awaitInfo.[v] <- ResizeArray<AwaitInfo> ()
 
-                            // Mark as multiple awaits since it's in a loop
-                            awaitInfo.[v].Add info
+                            // Add once with IsInLoop flag to indicate it's in a loop
                             awaitInfo.[v].Add info
                             // Track that we've processed this Bind in a loop
                             processedInLoop.Add expr.Range |> ignore
@@ -206,6 +207,7 @@ module ValueTaskAwaitAnalyzer =
                                 {
                                     Range = m
                                     Line = m.StartLine
+                                    IsInLoop = false
                                 }
 
                             if not (awaitInfo.ContainsKey v) then
@@ -251,18 +253,44 @@ module ValueTaskAwaitAnalyzer =
             let varName = kvp.Key.DisplayName
             let awaits = kvp.Value
 
-            if awaits.Count > 1 then
-                let lines = awaits |> Seq.map (fun a -> string a.Line) |> String.concat ", "
-                // Report at the location of the second await
-                let reportRange = awaits.[1].Range
+            // Check if any await is in a loop
+            let hasLoopAwait = awaits |> Seq.exists (fun a -> a.IsInLoop)
+
+            // For loop awaits, we only have one entry but it represents multiple executions
+            // For non-loop awaits, we need at least 2 entries
+            let isViolation = hasLoopAwait || awaits.Count > 1
+
+            if isViolation then
+                // Get unique line numbers and sort them
+                let uniqueLines =
+                    awaits
+                    |> Seq.map (fun a -> a.Line)
+                    |> Seq.distinct
+                    |> Seq.sort
+                    |> Seq.map string
+                    |> String.concat ", "
+
+                let lineCount = awaits |> Seq.map (fun a -> a.Line) |> Seq.distinct |> Seq.length
+
+                // Report at the location of the await (first one for loop case, second one for multiple awaits)
+                let reportRange = if hasLoopAwait then awaits.[0].Range else awaits.[1].Range
+
+                let message =
+                    if hasLoopAwait then
+                        let lineWord = if lineCount = 1 then "line" else "lines"
+
+                        $"ValueTask '{varName}' is awaited inside a loop at {lineWord} {uniqueLines}. "
+                        + "ValueTask should only be awaited once as subsequent awaits produce undefined behavior. "
+                        + "Consider using Task instead or restructure to await only once."
+                    else
+                        $"ValueTask '{varName}' is awaited multiple times at lines {uniqueLines}. "
+                        + "ValueTask should only be awaited once as subsequent awaits produce undefined behavior. "
+                        + "Consider using Task instead or restructure to await only once."
 
                 Some
                     {
                         Type = "ValueTaskAwaitAnalyzer"
-                        Message =
-                            $"ValueTask '{varName}' is awaited multiple times at lines {lines}. "
-                            + "ValueTask should only be awaited once as subsequent awaits produce undefined behavior. "
-                            + "Consider using Task instead or restructure to await only once."
+                        Message = message
                         Code = Code
                         Severity = Severity.Warning
                         Range = reportRange
