@@ -1,1 +1,1 @@
-WOOF-VALUETASK-AWAIT | Warning | (13,15--13,42) | ValueTask 'vt' is awaited multiple times at lines 13. ValueTask should only be awaited once as subsequent awaits produce undefined behavior. Consider using Task instead or restructure to await only once.
+WOOF-VALUETASK-AWAIT | Warning | (13,15--13,42) | ValueTask 'vt' is awaited multiple times at line 13. ValueTask should only be awaited once as subsequent awaits produce undefined behavior. Consider using Task instead or restructure to await only once.
