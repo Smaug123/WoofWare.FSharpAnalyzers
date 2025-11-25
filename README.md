@@ -189,6 +189,27 @@ Basically, users find it very confusing when a `finally` clause still needs exce
 
 Any `Dispose (isDisposing = false)` code path (conventionally called by the finaliser thread) is especially bad to throw in, because such errors are completely recoverable.
 
+## ReturnBangOnlyAnalyzer
+
+Detects computation expressions that consist only of `return!`, which is likely unnecessary indirection.
+
+Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-RETURN-BANG-ONLY" to suppress the analyzer.
+
+### Rationale
+
+A computation expression like `async { return! x }` where `x` is already an `Async<'T>` is almost always unnecessary indirection - you can just use `x` directly. For example:
+
+```fsharp
+// Unnecessary indirection
+let simpleAsync (x : Async<int>) = async { return! x }
+
+// Better - just use the value directly
+let simpleAsync (x : Async<int>) = x
+```
+
+They're not *quite* the same, because the `return!` phrasing can involve a call to `builder.Delay` and/or `builder.Run`, but I claim that this is a baroque and needlessly clever way to phrase that.
+If you genuinely need the `Delay` behavior for laziness, consider making this explicit with a function or documenting why the indirection is necessary.
+
 # Licence
 
 WoofWare.FSharpAnalyzers is licensed to you under the MIT licence, a copy of which can be found at [LICENSE.md](./LICENSE.md).

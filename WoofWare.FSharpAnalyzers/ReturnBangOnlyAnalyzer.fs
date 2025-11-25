@@ -1,0 +1,202 @@
+namespace WoofWare.FSharpAnalyzers
+
+open FSharp.Analyzers.SDK
+open FSharp.Analyzers.SDK.TASTCollecting
+open FSharp.Compiler.CodeAnalysis
+open FSharp.Compiler.Symbols
+open FSharp.Compiler.Symbols.FSharpExprPatterns
+open FSharp.Compiler.Text
+
+[<RequireQualifiedAccess>]
+module ReturnBangOnlyAnalyzer =
+
+    [<Literal>]
+    let Code = "WOOF-RETURN-BANG-ONLY"
+
+    let knownBuilderNames =
+        [
+            "Microsoft.FSharp.Control.AsyncBuilder"
+            "Microsoft.FSharp.Control.FSharpAsyncBuilder"
+            "Microsoft.FSharp.Control.TaskBuilder"
+            "Microsoft.FSharp.Control.BackgroundTaskBuilder"
+            "Microsoft.FSharp.Control.TaskBuilderBase"
+            "Microsoft.FSharp.Core.CompilerServices.OptionBuilder"
+            "Microsoft.FSharp.Core.CompilerServices.ResultBuilder"
+            "Microsoft.FSharp.Core.CompilerServices.ListBuilder"
+            "Microsoft.FSharp.Core.CompilerServices.ArrayBuilder"
+            "FSharp.Control.Tasks.TaskBuilder"
+            "FSharp.Control.Tasks.BackgroundTaskBuilder"
+            "FSharp.Control.Tasks.ValueTaskBuilder"
+            "FSharp.Control.Tasks.BackgroundValueTaskBuilder"
+            "FSharp.Control.Tasks.V2.ContextInsensitive.TaskBuilder"
+            "FSharp.Control.Tasks.V2.ContextInsensitive.BackgroundTaskBuilder"
+            "FSharp.Control.Tasks.V2.ContextInsensitive.ValueTaskBuilder"
+            "FSharp.Control.Tasks.V2.ContextInsensitive.BackgroundValueTaskBuilder"
+            "Ply.TaskBuilder"
+            "Ply.ValueTaskBuilder"
+        ]
+        |> Set.ofList
+
+    let builderSuffixes =
+        [
+            "TaskBuilder"
+            "BackgroundTaskBuilder"
+            "ValueTaskBuilder"
+            "AsyncBuilder"
+            "OptionBuilder"
+            "ResultBuilder"
+            "ListBuilder"
+            "ArrayBuilder"
+        ]
+
+    let builderMatches (name : string) =
+        knownBuilderNames.Contains name || builderSuffixes |> List.exists name.EndsWith
+
+    let isBuilderMethod (name : string) (mfv : FSharpMemberOrFunctionOrValue) =
+        // Use DisplayName instead of CompiledName because some builders (like TaskBuilderBase)
+        // prefix the method name with the class name in CompiledName
+        if mfv.DisplayName <> name then
+            false
+        else
+            mfv.ApparentEnclosingEntity
+            |> Option.bind (fun ent -> ent.TryFullName)
+            |> Option.exists builderMatches
+
+    // Check if an expression tree contains ONLY a single ReturnFrom call and no other operations
+    let isOnlyReturnFrom (expr : FSharpExpr) : bool =
+        let mutable foundReturnFrom = false
+        let mutable foundOtherOp = false
+
+        let rec walk (current : FSharpExpr) =
+            if foundOtherOp then
+                () // Early exit if we already found other operations
+            else
+                match current with
+                // Found a ReturnFrom - mark it
+                | Call (Some _, mfv, _, _, _) when isBuilderMethod "ReturnFrom" mfv -> foundReturnFrom <- true
+                // Found another builder operation - this means it's not "only return!"
+                | Call (Some _, mfv, _, _, _) when
+                    isBuilderMethod "Bind" mfv
+                    || isBuilderMethod "Combine" mfv
+                    || isBuilderMethod "Zero" mfv
+                    || isBuilderMethod "TryWith" mfv
+                    || isBuilderMethod "TryFinally" mfv
+                    || isBuilderMethod "For" mfv
+                    || isBuilderMethod "While" mfv
+                    || isBuilderMethod "Using" mfv
+                    || isBuilderMethod "Return" mfv  // Also exclude regular return
+                    ->
+                    foundOtherOp <- true
+                // Let bindings and other control flow also mean it's not "only return!"
+                | Let _ -> foundOtherOp <- true
+                | IfThenElse _ -> foundOtherOp <- true
+                // Pattern matching is control flow
+                | DecisionTree _ -> foundOtherOp <- true
+                | DecisionTreeSuccess _ -> foundOtherOp <- true
+                // Sequential means there are multiple operations
+                | Sequential _ -> foundOtherOp <- true
+                // Debug points and other wrappers - recurse
+                | DebugPoint (_, inner) -> walk inner
+                // For any other expression, check its sub-expressions
+                | _ -> current.ImmediateSubExpressions |> Seq.iter walk
+
+        walk expr
+        foundReturnFrom && not foundOtherOp
+
+    let analyze (checkFileResults : FSharpCheckFileResults) =
+        let violations = ResizeArray<range> ()
+
+        // First, collect all Delay calls that would be violations
+        let delayCallsToCheck = ResizeArray<range> ()
+
+        let collectDelays =
+            { new TypedTreeCollectorBase() with
+                override _.WalkCall _ mfv _ _ args m =
+                    if isBuilderMethod "Delay" mfv then
+                        match args with
+                        | [ Lambda (_, body) ] when isOnlyReturnFrom body -> delayCallsToCheck.Add m
+                        | _ -> ()
+            }
+
+        match checkFileResults.ImplementationFile with
+        | Some typedTree ->
+            walkTast collectDelays typedTree
+
+            // Now check each Delay call to see if it's inside a control flow operation
+            // by walking the tree again and looking for control flow that contains these Delays
+            let controlFlowRanges = ResizeArray<range> ()
+
+            let collectControlFlow =
+                { new TypedTreeCollectorBase() with
+                    override _.WalkCall _ mfv _ _ args m =
+                        if
+                            isBuilderMethod "TryWith" mfv
+                            || isBuilderMethod "TryFinally" mfv
+                            || isBuilderMethod "For" mfv
+                            || isBuilderMethod "While" mfv
+                            || isBuilderMethod "Using" mfv
+                            || isBuilderMethod "Combine" mfv
+                            || isBuilderMethod "Bind" mfv
+                        then
+                            controlFlowRanges.Add m
+                }
+
+            walkTast collectControlFlow typedTree
+
+            // A Delay is inside control flow if its range is contained within a control flow range
+            for delayRange in delayCallsToCheck do
+                let isInside =
+                    controlFlowRanges
+                    |> Seq.exists (fun cfRange ->
+                        // cfRange contains delayRange if:
+                        // cfRange starts before or at the same position as delayRange
+                        // AND cfRange ends after or at the same position as delayRange
+                        (cfRange.StartLine < delayRange.StartLine
+                         || (cfRange.StartLine = delayRange.StartLine
+                             && cfRange.StartColumn <= delayRange.StartColumn))
+                        && (cfRange.EndLine > delayRange.EndLine
+                            || (cfRange.EndLine = delayRange.EndLine
+                                && cfRange.EndColumn >= delayRange.EndColumn))
+                    )
+
+                if not isInside then
+                    violations.Add delayRange
+        | None -> ()
+
+        violations
+        |> Seq.toList
+        |> List.sortBy (fun range -> range.StartLine, range.StartColumn)
+        |> Seq.map (fun range ->
+            {
+                Type = "ReturnBangOnlyAnalyzer"
+                Message =
+                    "Computation expression consists only of 'return!'. "
+                    + "This is likely unnecessary indirection - consider using the inner value directly. "
+                    + "While this can introduce laziness through the builder's Delay method, "
+                    + "this is usually a code smell and the computation expression can be removed."
+                Code = Code
+                Severity = Severity.Info
+                Range = range
+                Fixes = []
+            }
+        )
+        |> Seq.toList
+
+    [<Literal>]
+    let Name = "ReturnBangOnly"
+
+    [<Literal>]
+    let ShortDescription =
+        "Detects computation expressions that consist only of 'return!' which may be unnecessary"
+
+    [<CliAnalyzer(Name, ShortDescription)>]
+    let cliAnalyzer : Analyzer<CliContext> =
+        fun ctx -> ctx.CheckFileResults |> analyze |> async.Return
+
+    [<EditorAnalyzer(Name, ShortDescription)>]
+    let editorAnalyzer : Analyzer<EditorContext> =
+        fun ctx ->
+            ctx.CheckFileResults
+            |> Option.map analyze
+            |> Option.defaultValue []
+            |> async.Return
