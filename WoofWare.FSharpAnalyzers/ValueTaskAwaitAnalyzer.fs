@@ -225,23 +225,27 @@ module ValueTaskAwaitAnalyzer =
                 args
                 |> List.iter (findBindsInExpr valueTaskBindings awaitInfo processedInLoop true (Some loopBindings))
 
+    /// Recursively process all declarations to find ValueTask bindings
+    let rec processDeclarations
+        (valueTaskBindings : Dictionary<FSharpMemberOrFunctionOrValue, unit>)
+        (decls : FSharpImplementationFileDeclaration list)
+        =
+        for decl in decls do
+            match decl with
+            | FSharpImplementationFileDeclaration.Entity (_, subDecls) ->
+                // Recursively process nested entities (modules, types, etc.)
+                processDeclarations valueTaskBindings subDecls
+            | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (_, _, expr) ->
+                findValueTaskBindings valueTaskBindings expr
+            | _ -> ()
+
     let analyze (typedTree : FSharpImplementationFileContents) =
         let valueTaskBindings = Dictionary<FSharpMemberOrFunctionOrValue, unit> ()
         let awaitInfo = Dictionary<FSharpMemberOrFunctionOrValue, ResizeArray<AwaitInfo>> ()
         let processedInLoop = HashSet<range> ()
 
-        // First pass: find all ValueTask bindings
-        for decl in typedTree.Declarations do
-            match decl with
-            | FSharpImplementationFileDeclaration.Entity (_, subDecls) ->
-                for subDecl in subDecls do
-                    match subDecl with
-                    | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (_, _, expr) ->
-                        findValueTaskBindings valueTaskBindings expr
-                    | _ -> ()
-            | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (_, _, expr) ->
-                findValueTaskBindings valueTaskBindings expr
-            | _ -> ()
+        // First pass: find all ValueTask bindings (recursively handles nested entities)
+        processDeclarations valueTaskBindings typedTree.Declarations
 
         // Second pass: find all awaits of tracked ValueTasks
         let walker = Walker (valueTaskBindings, awaitInfo, processedInLoop)
