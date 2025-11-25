@@ -276,14 +276,15 @@ module ValueTaskAwaitAnalyzer =
                 let reportRange = if hasLoopAwait then awaits.[0].Range else awaits.[1].Range
 
                 let message =
+                    let lineWord = if lineCount = 1 then "line" else "lines"
+
                     if hasLoopAwait then
-                        let lineWord = if lineCount = 1 then "line" else "lines"
 
                         $"ValueTask '{varName}' is awaited inside a loop at {lineWord} {uniqueLines}. "
                         + "ValueTask should only be awaited once as subsequent awaits produce undefined behavior. "
                         + "Consider using Task instead or restructure to await only once."
                     else
-                        $"ValueTask '{varName}' is awaited multiple times at lines {uniqueLines}. "
+                        $"ValueTask '{varName}' is awaited multiple times at {lineWord} {uniqueLines}. "
                         + "ValueTask should only be awaited once as subsequent awaits produce undefined behavior. "
                         + "Consider using Task instead or restructure to await only once."
 
