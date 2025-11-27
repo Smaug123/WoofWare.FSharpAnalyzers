@@ -165,12 +165,16 @@ module Tests =
                 )
 
             let ctx = file |> getContext options
-            let! result = client.RunAnalyzersSafely ctx
-            let messagesFromCli = getMessages result
 
-            match expected with
-            | Some expected -> assertExpected testCase.FileName expected messagesFromCli
-            | None -> Assert.That (messagesFromCli, Is.Empty)
+            try
+                let! result = client.RunAnalyzersSafely ctx
+                let messagesFromCli = getMessages result
+
+                match expected with
+                | Some expected -> assertExpected testCase.FileName expected messagesFromCli
+                | None -> Assert.That (messagesFromCli, Is.Empty)
+            finally
+                printfn "here"
         }
 
     /// Search for the WoofWare.FSharpAnalyzers.Test.fsproj file somewhere above the test assembly path.
