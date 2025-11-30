@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="WoofWare.FSharpAnalyzers.Test/WoofWare.FSharpAnalyzers.Test.fsproj" />
+  <Project Path="WoofWare.FSharpAnalyzers/WoofWare.FSharpAnalyzers.fsproj" />
+</Solution>
