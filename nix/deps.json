@@ -16,18 +16,18 @@
   },
   {
     "pname": "fsharp-analyzers",
-    "version": "0.35.0",
-    "hash": "sha256-GxQR3Fq28cb+akNbzRTav9nhMtayN/0g2d1G6Ml+ck4="
+    "version": "0.36.0",
+    "hash": "sha256-D7DtnFs38h0ilJ5Nlp9hVJ42yju11edcVfDOEs5XeWM="
   },
   {
     "pname": "FSharp.Analyzers.SDK",
-    "version": "0.35.0",
-    "hash": "sha256-JlwkutVgOUDZJ7PfzgXn6Pepr30Qd7M9FpcZwVXNGhc="
+    "version": "0.36.0",
+    "hash": "sha256-uzEKfVDNSu1HzoQDeC5jjcdjGDyb1j8m842cRcWRDyo="
   },
   {
     "pname": "FSharp.Analyzers.SDK.Testing",
-    "version": "0.35.0",
-    "hash": "sha256-PYbC12fpwJv/I5EZW+Us2fiZ++aRqK6UbgV2RDPee/o="
+    "version": "0.36.0",
+    "hash": "sha256-EApFVUXjSgj91p/LMYyHPyc33OZzgVmpiqcD+cFeCI0="
   },
   {
     "pname": "FSharp.Compiler.Service",
