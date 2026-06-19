@@ -21,23 +21,23 @@
   },
   {
     "pname": "FSharp.Analyzers.SDK",
-    "version": "0.36.0",
-    "hash": "sha256-uzEKfVDNSu1HzoQDeC5jjcdjGDyb1j8m842cRcWRDyo="
+    "version": "0.37.2",
+    "hash": "sha256-W+4jWsOaMXDCAFpPPjUbtIbGxZPZyA2Z97Nr7Zw+h9E="
   },
   {
     "pname": "FSharp.Analyzers.SDK.Testing",
-    "version": "0.36.0",
-    "hash": "sha256-EApFVUXjSgj91p/LMYyHPyc33OZzgVmpiqcD+cFeCI0="
+    "version": "0.37.2",
+    "hash": "sha256-7qz8TiH9lOHAidTkIkDzj6deqZ7qxr9tp9pyNafjmLg="
   },
   {
     "pname": "FSharp.Compiler.Service",
-    "version": "43.10.101",
-    "hash": "sha256-5r9ulr3IVW74Z/RRZ24RhI6wSPdv4jUZHNBKRhRIWco="
+    "version": "43.12.201",
+    "hash": "sha256-lYlDHWSRUqkyUwzdSJnFlB6dfrclDlPo7n8dJiGQvC4="
   },
   {
     "pname": "FSharp.Core",
-    "version": "10.0.101",
-    "hash": "sha256-i7crdE0/u+/mFCD1rNFc/iT5TFr8Dae9dNpVRmbpSbY="
+    "version": "10.1.201",
+    "hash": "sha256-NzxdRJgL+5RQpUm8Y6Mc0w7sakxqThv6qHpP+u0x5x0="
   },
   {
     "pname": "FSharp.Core",
