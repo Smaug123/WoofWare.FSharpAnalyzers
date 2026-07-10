@@ -80,22 +80,34 @@ module FlagFactsTests =
             )
         ]
 
-    let atoms = [ TLit true ; TLit false ; TOpaque 0 ; TOpaque 1 ]
+    let atoms = [| TLit true ; TLit false ; TOpaque 0 ; TOpaque 1 |]
 
-    /// All expressions whose immediate children are drawn from `smaller`.
-    let grow (smaller : TestExpr list) : TestExpr list =
-        [
-            yield! atoms
+    /// A deterministic pseudo-random source (splitmix64), so the sample is varied but reproducible.
+    let makeNextInt (seed : uint64) : int -> int =
+        let mutable state = seed
 
-            for a in smaller do
-                for b in smaller do
-                    for c in formulas do
-                        yield TCond (c, a, b)
+        fun (n : int) ->
+            state <- state + 0x9E3779B97F4A7C15UL
+            let mutable z = state
+            z <- (z ^^^ (z >>> 30)) * 0xBF58476D1CE4E5B9UL
+            z <- (z ^^^ (z >>> 27)) * 0x94D049BB133111EBUL
+            z <- z ^^^ (z >>> 31)
+            int (z % uint64 n)
 
-                    yield TOp (TaskCompletionSourceAnalyzer.BitOp.Or, a, b)
-                    yield TOp (TaskCompletionSourceAnalyzer.BitOp.And, a, b)
-                    yield TOp (TaskCompletionSourceAnalyzer.BitOp.Xor, a, b)
-        ]
+    /// A random expression of depth at most `maxDepth`, drawing leaves, conditionals (over the shared
+    /// two-atom `formulas`, so nested conditions can be correlated), and bitwise ops.
+    let randomExpr (nextInt : int -> int) (maxDepth : int) : TestExpr =
+        let rec go depth =
+            if depth <= 0 || nextInt 3 = 0 then
+                atoms.[nextInt atoms.Length]
+            else
+                match nextInt 4 with
+                | 0 -> TCond (List.item (nextInt (List.length formulas)) formulas, go (depth - 1), go (depth - 1))
+                | 1 -> TOp (TaskCompletionSourceAnalyzer.BitOp.Or, go (depth - 1), go (depth - 1))
+                | 2 -> TOp (TaskCompletionSourceAnalyzer.BitOp.And, go (depth - 1), go (depth - 1))
+                | _ -> TOp (TaskCompletionSourceAnalyzer.BitOp.Xor, go (depth - 1), go (depth - 1))
+
+        go maxDepth
 
     let allBools (n : int) : bool[] seq =
         Seq.init (1 <<< n) (fun mask -> Array.init n (fun i -> ((mask >>> i) &&& 1) = 1))
@@ -104,33 +116,62 @@ module FlagFactsTests =
     let freeSubsets =
         [ Set.empty ; Set.ofList [ 0 ] ; Set.ofList [ 1 ] ; Set.ofList [ 0 ; 1 ] ]
 
-    /// Candidate path conditions. To keep the concrete oracle clean we only ever constrain *free*
-    /// atoms, so a free assignment's feasibility does not depend on the (fixed but unknown) opaque
-    /// atoms. This mirrors the realistic case: an enclosing guard that pins a variable.
-    let pathConds (freeSet : Set<int>) : (TaskCompletionSourceAnalyzer.BoolFormula * bool) list list =
-        [
-            yield []
+    /// Candidate path conditions, over both atoms regardless of which is free. Crucially these include
+    /// couplings where an *opaque* atom gates a *free* one — the shape that exposes quantifier-order
+    /// mistakes between free and opaque atoms (feasibility of a free assignment under one hypothetical
+    /// opaque value must not make it count as reachable).
+    let pathCondCandidates : (TaskCompletionSourceAnalyzer.BoolFormula * bool) list list =
+        let atom0 = TaskCompletionSourceAnalyzer.BoolFormula.Atom 0
+        let atom1 = TaskCompletionSourceAnalyzer.BoolFormula.Atom 1
 
-            for i in freeSet do
-                yield [ TaskCompletionSourceAnalyzer.BoolFormula.Atom i, true ]
-                yield [ TaskCompletionSourceAnalyzer.BoolFormula.Atom i, false ]
+        [
+            []
+            [ atom0, true ]
+            [ atom0, false ]
+            [ atom1, true ]
+            [ atom1, false ]
+            // atom0 || not atom1, and its mirror
+            [
+                TaskCompletionSourceAnalyzer.BoolFormula.Branch (
+                    atom0,
+                    TaskCompletionSourceAnalyzer.BoolFormula.True,
+                    TaskCompletionSourceAnalyzer.BoolFormula.Not atom1
+                ),
+                true
+            ]
+            [
+                TaskCompletionSourceAnalyzer.BoolFormula.Branch (
+                    atom1,
+                    TaskCompletionSourceAnalyzer.BoolFormula.True,
+                    TaskCompletionSourceAnalyzer.BoolFormula.Not atom0
+                ),
+                true
+            ]
         ]
 
     /// Soundness of `flagFactsUnder`. Free atoms range over both values (each a reachable class of
     /// paths); opaque atoms — both the condition atoms not in `freeSet` and every opaque bit leaf —
-    /// have some fixed but unknown value, so a claim must hold whatever that value is. Path
-    /// conditions (over free atoms) exclude infeasible free assignments.
+    /// have some fixed but unknown value, so a claim must hold whatever that value is.
     ///
     /// For every expression, free/opaque split, and path condition, and for every fixed valuation of
     /// the opaque condition atoms and opaque bit leaves, let `results` be the concrete bit over the
-    /// feasible free assignments. Then:
+    /// feasible free assignments. Then, in every opaque world in which the site is *reachable* (a
+    /// non-empty `results`):
     ///   SomePathLacks = Some false  =>  the bit is 1 on every feasible path
-    ///   SomePathLacks = Some true   =>  some feasible path has bit 0
+    ///   SomePathLacks = Some true   =>  not every feasible path has the bit
     ///   SomePathHas   = Some false  =>  the bit is 0 on every feasible path
-    ///   SomePathHas   = Some true   =>  some feasible path has bit 1
+    ///   SomePathHas   = Some true   =>  some feasible path has the bit
+    ///
+    /// An empty `results` (the site is dead in that opaque world) constrains nothing: we deliberately
+    /// drop irrelevant path conditions rather than use them to prove unreachability, so a definite
+    /// violation may still be reported for a site that some opaque valuation would render dead.
+    ///
+    /// We sample randomly (rather than enumerate exhaustively) to keep the suite fast; the fixed seed
+    /// keeps failures reproducible.
     [<Test>]
     let ``flagFactsUnder is sound`` () =
-        let expressions = grow (grow atoms)
+        let nextInt = makeNextInt 0x1234_5678_9ABC_DEF0UL
+        let expressions = List.init 20000 (fun _ -> randomExpr nextInt 3)
 
         for e in expressions do
             let tree = toBitTree e
@@ -138,8 +179,8 @@ module FlagFactsTests =
             for freeSet in freeSubsets do
                 let isFree i = Set.contains i freeSet
 
-                for conds in pathConds freeSet do
-                    let facts = TaskCompletionSourceAnalyzer.BitTree.flagFactsUnder 2 isFree conds tree
+                for conds in pathCondCandidates do
+                    let facts = TaskCompletionSourceAnalyzer.BitTree.flagFactsUnder isFree conds tree
 
                     let pathHolds (condAtoms : bool[]) =
                         conds
@@ -169,7 +210,7 @@ module FlagFactsTests =
                             | Some true ->
                                 if not (List.isEmpty results) && List.forall id results then
                                     failwith
-                                        $"claimed a provably bit-less path, but bit set on every feasible path: %A{e}, free %A{freeSet}, conds %A{conds}, opaqueCondAtoms %A{opaqueCondAtoms}, opaques %A{opaques}"
+                                        $"claimed a provably bit-less path, but bit set on every feasible path in this opaque world: %A{e}, free %A{freeSet}, conds %A{conds}, opaqueCondAtoms %A{opaqueCondAtoms}, opaques %A{opaques}"
                             | None -> ()
 
                             match facts.SomePathHas with
@@ -180,5 +221,5 @@ module FlagFactsTests =
                             | Some true ->
                                 if not (List.isEmpty results) && not (List.exists id results) then
                                     failwith
-                                        $"claimed a provably bit-ful path, but bit clear on every feasible path: %A{e}, free %A{freeSet}, conds %A{conds}, opaqueCondAtoms %A{opaqueCondAtoms}, opaques %A{opaques}"
+                                        $"claimed a provably bit-ful path, but bit clear on every feasible path in this opaque world: %A{e}, free %A{freeSet}, conds %A{conds}, opaqueCondAtoms %A{opaqueCondAtoms}, opaques %A{opaques}"
                             | None -> ()
