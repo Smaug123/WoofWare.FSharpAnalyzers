@@ -396,88 +396,103 @@ module ThrowingInDisposeAnalyzer =
                 | None -> []
                 | Some calleeKey ->
 
-                // Declarations the call resolves to statically.
-                let direct =
+                // Declarations whose own identity matches the callee: a concrete helper, or
+                // the default body of a virtual slot.
+                let ownKeyMatches =
                     disposeDecls
-                    |> List.filter (fun (_, _, _, ownKey, _) -> ownKey = Some calleeKey)
-                    |> List.map (fun (i, _, _, _, _) -> i)
+                    |> List.choose (fun (i, mfv, _, ownKey, _) ->
+                        if ownKey = Some calleeKey then Some (i, mfv) else None
+                    )
 
-                // Overrides the call can dispatch to virtually. The receiver's static type
-                // bounds the possibilities: the executing body is the most-derived override
-                // at or above the receiver's *dynamic* type, which is the receiver's static
-                // type or a subtype of it.
-                let viaDispatch =
-                    let receiverEntity =
-                        receiverType
-                        |> Option.map (fun typ -> typ.StripAbbreviations ())
-                        |> Option.bind (fun typ ->
-                            if typ.HasTypeDefinition then
-                                Some typ.TypeDefinition
-                            else
-                                None
+                // Declarations that implement the callee as an abstract slot (overrides and
+                // interface implementations; the body lives on the implementing type).
+                let slotMatches =
+                    disposeDecls
+                    |> List.choose (fun (i, mfv, _, _, slotKeys) ->
+                        if List.contains calleeKey slotKeys then
+                            Some (i, mfv)
+                        else
+                            None
+                    )
+
+                if List.isEmpty slotMatches then
+                    // Nothing in this file implements the callee as a virtual slot: the call
+                    // resolves statically to the member itself.
+                    ownKeyMatches |> List.map fst
+                else
+
+                // The callee is a virtual slot, so everything competes under dispatch —
+                // including the slot's own default body, which a safe override on the
+                // disposal path shadows just like any other base implementation. The
+                // receiver's static type bounds the possibilities: the executing body is
+                // the most-derived override at or above the receiver's *dynamic* type,
+                // which is the receiver's static type or a subtype of it.
+                let receiverEntity =
+                    receiverType
+                    |> Option.map (fun typ -> typ.StripAbbreviations ())
+                    |> Option.bind (fun typ ->
+                        if typ.HasTypeDefinition then
+                            Some typ.TypeDefinition
+                        else
+                            None
+                    )
+
+                match receiverEntity with
+                | None ->
+                    // Without a receiver we cannot bound dispatch; resolve statically.
+                    ownKeyMatches |> List.map fst
+                | Some receiverEntity ->
+                    let receiverChain = selfAndAncestorNames receiverEntity
+
+                    let candidates =
+                        ownKeyMatches @ slotMatches
+                        |> List.distinctBy fst
+                        |> List.choose (fun (i, mfv) -> mfv.DeclaringEntity |> Option.map (fun entity -> i, entity))
+
+                    // A body on the receiver's own chain executes only if no other
+                    // same-file implementation sits strictly closer to the receiver (which
+                    // would shadow it for every dynamic type at or below the receiver's
+                    // static type); keep just the most-derived.
+                    let mostDerivedAncestorSide =
+                        candidates
+                        |> List.choose (fun (i, entity) ->
+                            entity.TryGetFullName ()
+                            |> Option.bind (fun name -> receiverChain |> List.tryFindIndex ((=) name))
+                            |> Option.map (fun position -> i, position)
                         )
+                        |> function
+                            | [] -> []
+                            | positioned ->
+                                let mostDerived = positioned |> List.map snd |> List.min
 
-                    match receiverEntity with
-                    | None -> []
-                    | Some receiverEntity ->
-                        let receiverChain = selfAndAncestorNames receiverEntity
+                                positioned
+                                |> List.filter (fun (_, position) -> position = mostDerived)
+                                |> List.map fst
 
-                        let candidates =
-                            disposeDecls
-                            |> List.choose (fun (i, mfv, _, _, slotKeys) ->
-                                if List.contains calleeKey slotKeys then
-                                    mfv.DeclaringEntity |> Option.map (fun entity -> i, entity)
-                                else
-                                    None
-                            )
+                    // A body on a subtype of the receiver can execute whenever the dynamic
+                    // type is that subtype (or below). For an interface receiver, every
+                    // implementing type is such a "subtype".
+                    let descendantSide =
+                        let receiverName = receiverEntity.TryGetFullName ()
 
-                        // An override on the receiver's own chain executes only if no other
-                        // same-file override sits strictly closer to the receiver (which
-                        // would shadow it for every dynamic type at or below the receiver's
-                        // static type); keep just the most-derived.
-                        let mostDerivedAncestorSide =
-                            candidates
-                            |> List.choose (fun (i, entity) ->
-                                entity.TryGetFullName ()
-                                |> Option.bind (fun name -> receiverChain |> List.tryFindIndex ((=) name))
-                                |> Option.map (fun position -> i, position)
-                            )
-                            |> function
-                                | [] -> []
-                                | positioned ->
-                                    let mostDerived = positioned |> List.map snd |> List.min
+                        candidates
+                        |> List.filter (fun (_, entity) ->
+                            match entity.TryGetFullName (), receiverName with
+                            | Some name, Some receiverName ->
+                                // Strictly below the receiver: candidates on the receiver's
+                                // own chain are handled (with shadowing) above.
+                                not (List.contains name receiverChain)
+                                && (List.contains receiverName (selfAndAncestorNames entity)
+                                    || (entity.AllInterfaces
+                                        |> Seq.exists (fun iface ->
+                                            iface.HasTypeDefinition
+                                            && iface.TypeDefinition.TryGetFullName () = Some receiverName
+                                        )))
+                            | _ -> false
+                        )
+                        |> List.map fst
 
-                                    positioned
-                                    |> List.filter (fun (_, position) -> position = mostDerived)
-                                    |> List.map fst
-
-                        // An override on a subtype of the receiver can execute whenever the
-                        // dynamic type is that subtype (or below). For an interface
-                        // receiver, every implementing type is such a "subtype".
-                        let descendantSide =
-                            let receiverName = receiverEntity.TryGetFullName ()
-
-                            candidates
-                            |> List.filter (fun (_, entity) ->
-                                match entity.TryGetFullName (), receiverName with
-                                | Some name, Some receiverName ->
-                                    // Strictly below the receiver: candidates on the
-                                    // receiver's own chain are handled (with shadowing)
-                                    // above.
-                                    not (List.contains name receiverChain)
-                                    && (List.contains receiverName (selfAndAncestorNames entity)
-                                        || (entity.AllInterfaces
-                                            |> Seq.exists (fun iface ->
-                                                iface.HasTypeDefinition
-                                                && iface.TypeDefinition.TryGetFullName () = Some receiverName
-                                            )))
-                                | _ -> false
-                            )
-                            |> List.map fst
-
-                        mostDerivedAncestorSide @ descendantSide
-
-                (direct @ viaDispatch) |> List.distinct
+                    mostDerivedAncestorSide @ descendantSide
 
             // A finalizer participates in disposal (`override this.Finalize () =
             // this.Dispose false` is the classic pattern), so it seeds the trace alongside
