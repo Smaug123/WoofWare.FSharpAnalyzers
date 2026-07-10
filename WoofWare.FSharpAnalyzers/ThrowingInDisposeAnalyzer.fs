@@ -200,7 +200,16 @@ module ThrowingInDisposeAnalyzer =
         |> List.ofSeq
 
     /// Recursively walk an expression, collecting every member called on it whose compiled
-    /// name is Dispose
+    /// name is Dispose.
+    ///
+    /// Lexical containment approximates execution here: a Dispose call anywhere in the
+    /// body — including inside a lambda, which may in fact be deferred or escape — is
+    /// treated as executing during disposal, and conversely a call inside a try body is
+    /// treated as covered by the handler even if a closure built there is only invoked
+    /// later. Distinguishing these would need closure escape analysis. The lambda side
+    /// errs towards reporting: a stored closure that disposes is deferred disposal anyway,
+    /// and walking lambda bodies is what catches the common synchronous-callback pattern
+    /// `lock gate (fun () -> this.Dispose true)` (see the LockedDelegation test).
     let rec private findDisposeCallees (expr : FSharpExpr) (acc : ResizeArray<FSharpMemberOrFunctionOrValue>) =
         match expr with
         | FSharpExprPatterns.TryWith (_, _, _, _, catchExpr, _, _) ->
