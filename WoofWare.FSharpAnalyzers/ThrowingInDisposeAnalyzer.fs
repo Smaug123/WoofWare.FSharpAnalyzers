@@ -199,31 +199,9 @@ module ThrowingInDisposeAnalyzer =
         )
         |> List.ofSeq
 
-    /// The full names of an entity and all its base classes, most-derived first.
-    ///
-    /// Deliberate approximation: this compares type *definitions*, ignoring generic
-    /// instantiation, so hierarchies under `Base<int>` and `Base<string>` are conflated
-    /// when bounding virtual dispatch. Distinguishing them by rendering constructed types
-    /// would be wrong in the other direction (a generic subclass `Sub<'T> : Base<'T>`
-    /// renders as `Base<<generic>>` and would never match a `Base<int>` receiver);
-    /// doing it properly requires type unification, which is not worth the complexity
-    /// for a per-file lint. We err towards over-reporting in same-file hierarchies that
-    /// mix instantiations of one generic base.
-    let rec private selfAndAncestorNames (entity : FSharpEntity) : string list =
-        let self = entity.TryGetFullName () |> Option.toList
-
-        match entity.BaseType with
-        | Some baseType when baseType.HasTypeDefinition ->
-            self @ selfAndAncestorNames ((baseType.StripAbbreviations ()).TypeDefinition)
-        | _ -> self
-
     /// Recursively walk an expression, collecting every member called on it whose compiled
-    /// name is Dispose, along with the static type of the call's receiver (which bounds the
-    /// overrides a virtual call can dispatch to)
-    let rec private findDisposeCallees
-        (expr : FSharpExpr)
-        (acc : ResizeArray<FSharpMemberOrFunctionOrValue * FSharpType option>)
-        =
+    /// name is Dispose
+    let rec private findDisposeCallees (expr : FSharpExpr) (acc : ResizeArray<FSharpMemberOrFunctionOrValue>) =
         match expr with
         | FSharpExprPatterns.TryWith (_, _, _, _, catchExpr, _, _) ->
             // Mirror findThrowCalls: a Dispose call inside the try body has its exceptions
@@ -234,8 +212,7 @@ module ThrowingInDisposeAnalyzer =
         | _ ->
 
         match expr with
-        | FSharpExprPatterns.Call (objExprOpt, mfv, _, _, _) when mfv.CompiledName = "Dispose" ->
-            acc.Add (mfv, objExprOpt |> Option.map (fun objExpr -> objExpr.Type))
+        | FSharpExprPatterns.Call (_, mfv, _, _, _) when mfv.CompiledName = "Dispose" -> acc.Add mfv
         | _ -> ()
 
         expr.ImmediateSubExpressions
@@ -394,135 +371,32 @@ module ThrowingInDisposeAnalyzer =
                     || mfv.ImplementedAbstractSignatures
                        |> Seq.exists (fun abs -> abs.Name = "Dispose")
                 )
-                |> Seq.map (fun (i, (mfv, expr)) -> i, mfv, expr, memberKey mfv, slotKeys mfv)
+                |> Seq.map (fun (i, (mfv, _)) -> i, memberKey mfv, slotKeys mfv)
                 |> List.ofSeq
 
-            // Resolve one traced call to the declaration indices whose bodies it can
-            // execute.
-            let resolveCallee (callee : FSharpMemberOrFunctionOrValue) (receiverType : FSharpType option) : int list =
+            // Resolve one traced call to every declaration that provides a body for it:
+            // declarations whose own identity matches the callee (a concrete helper, or a
+            // virtual slot's default body), plus declarations implementing the callee as an
+            // abstract slot (overrides and interface implementations; a virtual call is
+            // reported against the slot's declaring type, while the body lives on the
+            // implementing type).
+            //
+            // Deliberately, there is no receiver-based reachability narrowing: a throwing
+            // implementation of a slot that some disposal path in this file calls is worth
+            // flagging even when that particular call cannot dispatch to it (a sibling or
+            // shadowed override, say). It is a Dispose method by declaration, and a caller
+            // that does reach it may live in another file, beyond per-file analysis.
+            let resolveCallee (callee : FSharpMemberOrFunctionOrValue) : int list =
                 match memberKey callee with
                 | None -> []
                 | Some calleeKey ->
-
-                // Declarations whose own identity matches the callee: a concrete helper, or
-                // the default body of a virtual slot.
-                let ownKeyMatches =
                     disposeDecls
-                    |> List.choose (fun (i, mfv, _, ownKey, _) ->
-                        if ownKey = Some calleeKey then Some (i, mfv) else None
-                    )
-
-                // Declarations that implement the callee as an abstract slot (overrides and
-                // interface implementations; the body lives on the implementing type).
-                let slotMatches =
-                    disposeDecls
-                    |> List.choose (fun (i, mfv, _, _, slotKeys) ->
-                        if List.contains calleeKey slotKeys then
-                            Some (i, mfv)
+                    |> List.choose (fun (i, ownKey, slotKeys) ->
+                        if ownKey = Some calleeKey || List.contains calleeKey slotKeys then
+                            Some i
                         else
                             None
                     )
-
-                if List.isEmpty slotMatches then
-                    // Nothing in this file implements the callee as a virtual slot: the call
-                    // resolves statically to the member itself.
-                    ownKeyMatches |> List.map fst
-                else
-
-                // The callee is a virtual slot, so everything competes under dispatch —
-                // including the slot's own default body, which a safe override on the
-                // disposal path shadows just like any other base implementation. The
-                // receiver's static type bounds the possibilities: the executing body is
-                // the most-derived override at or above the receiver's *dynamic* type,
-                // which is the receiver's static type or a subtype of it. A receiver typed
-                // by a generic parameter is bounded by the parameter's coercion constraints
-                // instead ('T when 'T :> ICleanup can only ever be an ICleanup).
-                let boundingReceivers =
-                    match receiverType with
-                    | None -> []
-                    | Some typ ->
-                        let typ = typ.StripAbbreviations ()
-
-                        if typ.IsGenericParameter then
-                            typ.GenericParameter.Constraints
-                            |> Seq.choose (fun constr ->
-                                if constr.IsCoercesToConstraint then
-                                    let target = constr.CoercesToTarget.StripAbbreviations ()
-
-                                    if target.HasTypeDefinition then
-                                        Some target.TypeDefinition
-                                    else
-                                        None
-                                else
-                                    None
-                            )
-                            |> List.ofSeq
-                        elif typ.HasTypeDefinition then
-                            [ typ.TypeDefinition ]
-                        else
-                            []
-
-                match boundingReceivers with
-                | [] ->
-                    // Without a receiver we cannot bound dispatch; resolve statically.
-                    ownKeyMatches |> List.map fst
-                | receiverEntities ->
-
-                receiverEntities
-                |> List.collect (fun receiverEntity ->
-                    let receiverChain = selfAndAncestorNames receiverEntity
-
-                    let candidates =
-                        ownKeyMatches @ slotMatches
-                        |> List.distinctBy fst
-                        |> List.choose (fun (i, mfv) -> mfv.DeclaringEntity |> Option.map (fun entity -> i, entity))
-
-                    // A body on the receiver's own chain executes only if no other
-                    // same-file implementation sits strictly closer to the receiver (which
-                    // would shadow it for every dynamic type at or below the receiver's
-                    // static type); keep just the most-derived.
-                    let mostDerivedAncestorSide =
-                        candidates
-                        |> List.choose (fun (i, entity) ->
-                            entity.TryGetFullName ()
-                            |> Option.bind (fun name -> receiverChain |> List.tryFindIndex ((=) name))
-                            |> Option.map (fun position -> i, position)
-                        )
-                        |> function
-                            | [] -> []
-                            | positioned ->
-                                let mostDerived = positioned |> List.map snd |> List.min
-
-                                positioned
-                                |> List.filter (fun (_, position) -> position = mostDerived)
-                                |> List.map fst
-
-                    // A body on a subtype of the receiver can execute whenever the dynamic
-                    // type is that subtype (or below). For an interface receiver, every
-                    // implementing type is such a "subtype".
-                    let descendantSide =
-                        let receiverName = receiverEntity.TryGetFullName ()
-
-                        candidates
-                        |> List.filter (fun (_, entity) ->
-                            match entity.TryGetFullName (), receiverName with
-                            | Some name, Some receiverName ->
-                                // Strictly below the receiver: candidates on the receiver's
-                                // own chain are handled (with shadowing) above.
-                                not (List.contains name receiverChain)
-                                && (List.contains receiverName (selfAndAncestorNames entity)
-                                    || (entity.AllInterfaces
-                                        |> Seq.exists (fun iface ->
-                                            iface.HasTypeDefinition
-                                            && iface.TypeDefinition.TryGetFullName () = Some receiverName
-                                        )))
-                            | _ -> false
-                        )
-                        |> List.map fst
-
-                    mostDerivedAncestorSide @ descendantSide
-                )
-                |> List.distinct
 
             // A finalizer participates in disposal (`override this.Finalize () =
             // this.Dispose false` is the classic pattern), so it seeds the trace alongside
@@ -563,11 +437,11 @@ module ThrowingInDisposeAnalyzer =
 
             while queue.Count > 0 do
                 let body = queue.Dequeue ()
-                let callees = ResizeArray<FSharpMemberOrFunctionOrValue * FSharpType option> ()
+                let callees = ResizeArray<FSharpMemberOrFunctionOrValue> ()
                 findDisposeCallees body callees
 
-                for callee, receiverType in callees do
-                    for i in resolveCallee callee receiverType do
+                for callee in callees do
+                    for i in resolveCallee callee do
                         reached.Add i |> ignore
 
                         if visited.Add i then

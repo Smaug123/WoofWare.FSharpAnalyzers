@@ -3,8 +3,10 @@ module ShadowedDefaultBody
 open System
 
 /// A non-disposable base provides a throwing default for its virtual Dispose slot; the
-/// disposable leaf overrides it safely. Disposal dispatches to the leaf's override, so
-/// the base's default body never executes during disposal and must not be flagged.
+/// disposable leaf overrides it safely. Disposal of a leaf instance dispatches to the
+/// leaf's override, but the default body is still an implementation of a slot that
+/// disposal calls, so it is deliberately flagged: a subclass that does not override the
+/// slot would execute it during disposal.
 type BaseWithDefault () =
     abstract Dispose : bool -> unit
 
