@@ -605,7 +605,9 @@ module TaskCompletionSourceAnalyzer =
             for boundVars, target in targets do
                 walkExpr violations env (boundVars @ constrainedVars) pathConds target
         // A quotation builds a code-as-data `Expr`; its body is not executed, so any constructor
-        // syntax inside it must not be analysed as a real call.
+        // syntax inside it must not be analysed as a real call. Known limitation: a splice operand
+        // (`%e`) *does* execute while the quotation is built, but we don't descend to walk it, so a
+        // TaskCompletionSource genuinely constructed inside a splice is not reported.
         | Quote _ -> ()
         | _ ->
             for sub in expr.ImmediateSubExpressions do
