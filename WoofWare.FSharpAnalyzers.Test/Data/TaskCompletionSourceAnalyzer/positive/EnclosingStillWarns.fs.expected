@@ -1,0 +1,1 @@
+WOOF-TCS-ASYNC | Warning | (11,12--16,13) | TaskCompletionSource<T> created without TaskCreationOptions.RunContinuationsAsynchronously. This can cause continuations to run inline on the calling thread, leading to deadlocks, thread-pool starvation, and corruption of state. Always use: new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously).

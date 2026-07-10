@@ -1,9 +1,9 @@
 namespace WoofWare.FSharpAnalyzers
 
 open FSharp.Analyzers.SDK
-open FSharp.Analyzers.SDK.TASTCollecting
 open FSharp.Compiler.Symbols
 open FSharp.Compiler.Symbols.FSharpExprPatterns
+open FSharp.Compiler.Syntax
 open FSharp.Compiler.Text
 
 [<RequireQualifiedAccess>]
@@ -191,16 +191,71 @@ module TaskCompletionSourceAnalyzer =
                 | BitOp.And -> FlagFacts.bitwiseAnd lhs rhs
                 | BitOp.Xor -> FlagFacts.bitwiseXor lhs rhs
 
-        /// Facts about the bit across all paths: every valuation of the condition atoms is a
-        /// reachable class of paths (atoms are free booleans by construction), so we enumerate the
-        /// valuations and join. Infeasible branches thus contribute nothing, and conditionals
-        /// sharing an atom resolve consistently. Gives up (no information) past AtomCap atoms.
-        let flagFacts (atomCount : int) (t : BitTree) : FlagFacts =
+        /// Facts about the bit across all reachable paths.
+        ///
+        /// Free atoms (`isFree`) are genuine boolean variables: each of their valuations is a
+        /// reachable class of paths, so existential facts across them are sound, and conditionals
+        /// sharing a free atom resolve consistently. Opaque atoms are guards whose reachability we
+        /// cannot establish, so we only ever assert facts that hold for *every* opaque valuation.
+        ///
+        /// `pathConds` are boolean formulas (over the same atoms) known to hold, with the given
+        /// truth value, on every path that reaches this expression; valuations violating them are
+        /// infeasible and excluded. If nothing is feasible (a dead path) we report no information.
+        ///
+        /// Gives up (no information) past AtomCap atoms.
+        let flagFactsUnder
+            (atomCount : int)
+            (isFree : int -> bool)
+            (pathConds : (BoolFormula * bool) list)
+            (t : BitTree)
+            : FlagFacts
+            =
             if atomCount > AtomCap then
                 FlagFacts.unknown
             else
-                Seq.init (1 <<< atomCount) (fun mask -> eval (fun i -> ((mask >>> i) &&& 1) = 1) t)
-                |> Seq.reduce FlagFacts.join
+                let feasible =
+                    Seq.init
+                        (1 <<< atomCount)
+                        (fun mask ->
+                            let valuation i = ((mask >>> i) &&& 1) = 1
+                            valuation
+                        )
+                    |> Seq.filter (fun valuation ->
+                        pathConds
+                        |> List.forall (fun (f, expected) -> BoolFormula.eval valuation f = expected)
+                    )
+                    // Group feasible valuations by their free-atom part. Within a group the free atoms
+                    // are fixed and only opaque atoms vary.
+                    |> Seq.groupBy (fun valuation ->
+                        [
+                            for i in 0 .. atomCount - 1 do
+                                if isFree i then
+                                    yield valuation i
+                        ]
+                    )
+                    |> Seq.toList
+
+                match feasible with
+                | [] ->
+                    // No feasible valuation at all: the path condition is unsatisfiable, so this code
+                    // is unreachable and we can prove nothing about it.
+                    FlagFacts.unknown
+                | groups ->
+                    groups
+                    |> List.map (fun (_, valuations) ->
+                        // Over the opaque valuations feasible for this free assignment, assert only a
+                        // fact that holds universally.
+                        let facts = valuations |> Seq.map (fun valuation -> eval valuation t) |> Seq.toList
+
+                        if facts |> List.forall FlagFacts.isAlwaysSet then
+                            FlagFacts.alwaysSet
+                        elif facts |> List.forall FlagFacts.isNeverSet then
+                            FlagFacts.neverSet
+                        else
+                            FlagFacts.unknown
+                    )
+                    // Each free assignment is genuinely reachable, so join the per-assignment facts.
+                    |> List.reduce FlagFacts.join
 
     let runContinuationsAsynchronouslyBit =
         int64 System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
@@ -215,30 +270,42 @@ module TaskCompletionSourceAnalyzer =
             | None -> false
         )
 
-    /// Numbers the opaque leaves of condition formulas. Reads of the same immutable value share an
-    /// atom; everything else (including mutable reads, which may change between occurrences) gets a
-    /// fresh atom per occurrence.
+    /// Numbers the leaves of condition formulas, and records which are "free". A free atom is a read
+    /// of a genuine boolean variable, both truth values of which we treat as reachable; reads of the
+    /// same immutable value share a free atom (mutable reads may change between occurrences, so each
+    /// gets its own). An opaque atom is any other guard: an expression whose value — and whose
+    /// reachability under either truth value — we cannot determine.
     type private AtomAllocator () =
         let byValue =
             System.Collections.Generic.Dictionary<FSharpMemberOrFunctionOrValue, int> ()
 
+        let freeAtoms = System.Collections.Generic.HashSet<int> ()
         let mutable count = 0
 
         member _.Count = count
 
-        member _.Fresh () =
+        member _.IsFree (i : int) = freeAtoms.Contains i
+
+        /// A fresh opaque atom.
+        member _.FreshOpaque () =
             let i = count
             count <- count + 1
             i
 
+        member private _.FreshFree () =
+            let i = count
+            count <- count + 1
+            freeAtoms.Add i |> ignore
+            i
+
         member this.OfValue (v : FSharpMemberOrFunctionOrValue) =
             if v.IsMutable then
-                this.Fresh ()
+                this.FreshFree ()
             else
                 match byValue.TryGetValue v with
                 | true, i -> i
                 | false, _ ->
-                    let i = this.Fresh ()
+                    let i = this.FreshFree ()
                     byValue.[v] <- i
                     i
 
@@ -247,13 +314,13 @@ module TaskCompletionSourceAnalyzer =
         | Const (value, _) ->
             match value with
             | :? bool as b -> if b then BoolFormula.True else BoolFormula.False
-            | _ -> BoolFormula.Atom (atoms.Fresh ())
+            | _ -> BoolFormula.Atom (atoms.FreshOpaque ())
         | Value v -> BoolFormula.Atom (atoms.OfValue v)
         // && and || desugar to IfThenElse in the TAST, so this covers them too
         | IfThenElse (cond, thenF, elseF) ->
             BoolFormula.Branch (toFormula atoms cond, toFormula atoms thenF, toFormula atoms elseF)
         | Call (None, mfv, _, _, [ arg ]) when isCoreOperator "Not" mfv -> BoolFormula.Not (toFormula atoms arg)
-        | _ -> BoolFormula.Atom (atoms.Fresh ())
+        | _ -> BoolFormula.Atom (atoms.FreshOpaque ())
 
     let rec private toBitTree (atoms : AtomAllocator) (expr : FSharpExpr) : BitTree =
         match expr with
@@ -279,15 +346,23 @@ module TaskCompletionSourceAnalyzer =
         | _ -> BitTree.Leaf FlagFacts.unknown
 
     /// Conservatively evaluate what we know about the RunContinuationsAsynchronously bit of the
-    /// value of this TaskCreationOptions expression. Anything we can't analyse (e.g. an opaque
-    /// variable, which may well be correct) yields no information.
-    let flagFacts (expr : FSharpExpr) : FlagFacts =
+    /// value of this TaskCreationOptions expression, given the conditions known to hold on the path
+    /// that reaches it. Anything we can't analyse (e.g. an opaque variable, which may well be
+    /// correct) yields no information.
+    ///
+    /// `pathConds` are the enclosing branch conditions (with the truth value taken) between the
+    /// declaration and this expression. They are converted with the same atom allocator as the
+    /// options expression, so a variable read as an enclosing guard is identified with the same read
+    /// inside the options.
+    let flagFacts (pathConds : (FSharpExpr * bool) list) (expr : FSharpExpr) : FlagFacts =
         let atoms = AtomAllocator ()
+        let condFormulas = pathConds |> List.map (fun (e, b) -> toFormula atoms e, b)
         let tree = toBitTree atoms expr
-        BitTree.flagFacts atoms.Count tree
+        BitTree.flagFactsUnder atoms.Count atoms.IsFree condFormulas tree
 
     let checkTaskCompletionSourceCall
         (violations : ResizeArray<range>)
+        (pathConds : (FSharpExpr * bool) list)
         (mfv : FSharpMemberOrFunctionOrValue)
         (args : FSharpExpr list)
         (m : range)
@@ -312,26 +387,49 @@ module TaskCompletionSourceAnalyzer =
                 let hasViolation =
                     match taskCreationOptionsArgs with
                     | [] -> true // No TaskCreationOptions argument at all
-                    | opts -> opts |> List.exists (fun opt -> (flagFacts opt).SomePathLacks = Some true)
+                    | opts ->
+                        opts
+                        |> List.exists (fun opt -> (flagFacts pathConds opt).SomePathLacks = Some true)
 
                 if hasViolation then
                     violations.Add m
 
-    let analyze (typedTree : FSharpImplementationFileContents) =
+    /// Walk an expression, threading the enclosing branch conditions so that constraints established
+    /// before reaching a constructor are available when its options argument is analysed. Only
+    /// if/then/else (which also covers the desugaring of && and ||) refines the path condition;
+    /// other control flow simply recurses without adding constraints.
+    let rec private walkExpr
+        (violations : ResizeArray<range>)
+        (pathConds : (FSharpExpr * bool) list)
+        (expr : FSharpExpr)
+        =
+        match expr with
+        | NewObject (mfv, _typeArgs, args) -> checkTaskCompletionSourceCall violations pathConds mfv args expr.Range
+        | Call (_, mfv, _, _, args) -> checkTaskCompletionSourceCall violations pathConds mfv args expr.Range
+        | _ -> ()
+
+        match expr with
+        | IfThenElse (cond, thenExpr, elseExpr) ->
+            walkExpr violations pathConds cond
+            walkExpr violations ((cond, true) :: pathConds) thenExpr
+            walkExpr violations ((cond, false) :: pathConds) elseExpr
+        | _ ->
+            for sub in expr.ImmediateSubExpressions do
+                walkExpr violations pathConds sub
+
+    let rec private walkDeclaration (violations : ResizeArray<range>) (decl : FSharpImplementationFileDeclaration) =
+        match decl with
+        | FSharpImplementationFileDeclaration.Entity (_, subDecls) ->
+            for subDecl in subDecls do
+                walkDeclaration violations subDecl
+        | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (_, _, body) -> walkExpr violations [] body
+        | FSharpImplementationFileDeclaration.InitAction expr -> walkExpr violations [] expr
+
+    let analyzeTypedTree (typedTree : FSharpImplementationFileContents) =
         let violations = ResizeArray<range> ()
 
-        let walker =
-            { new TypedTreeCollectorBase() with
-                override _.WalkLet _ (rhs : FSharpExpr) _ =
-                    match rhs with
-                    | NewObject (mfv, _typeArgs, args) -> checkTaskCompletionSourceCall violations mfv args rhs.Range
-                    | _ -> ()
-
-                override _.WalkCall _ (mfv : FSharpMemberOrFunctionOrValue) _ _ (args : FSharpExpr list) (m : range) =
-                    checkTaskCompletionSourceCall violations mfv args m
-            }
-
-        walkTast walker typedTree
+        for decl in typedTree.Declarations do
+            walkDeclaration violations decl
 
         violations
         |> Seq.map (fun range ->
@@ -350,6 +448,17 @@ module TaskCompletionSourceAnalyzer =
         )
         |> Seq.toList
 
+    /// Backwards-compatible entry point. The analysis is now driven entirely from the typed tree;
+    /// `sourceText` and `ast` are no longer consulted but are retained so existing callers keep
+    /// compiling. New callers should prefer `analyzeTypedTree`.
+    let analyze
+        (_sourceText : ISourceText)
+        (_ast : ParsedInput)
+        (typedTree : FSharpImplementationFileContents)
+        : Message list
+        =
+        analyzeTypedTree typedTree
+
     [<Literal>]
     let Name = "TaskCompletionSource"
 
@@ -359,8 +468,8 @@ module TaskCompletionSourceAnalyzer =
 
     [<CliAnalyzer(Name, ShortDescription)>]
     let cliAnalyzer : Analyzer<CliContext> =
-        fun ctx -> async { return ctx.TypedTree |> Option.map analyze |> Option.defaultValue [] }
+        fun ctx -> async { return ctx.TypedTree |> Option.map analyzeTypedTree |> Option.defaultValue [] }
 
     [<EditorAnalyzer(Name, ShortDescription)>]
     let editorAnalyzer : Analyzer<EditorContext> =
-        fun ctx -> async { return ctx.TypedTree |> Option.map analyze |> Option.defaultValue [] }
+        fun ctx -> async { return ctx.TypedTree |> Option.map analyzeTypedTree |> Option.defaultValue [] }
