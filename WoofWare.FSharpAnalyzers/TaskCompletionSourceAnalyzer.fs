@@ -142,25 +142,51 @@ module TaskCompletionSourceAnalyzer =
 
     [<RequireQualifiedAccess>]
     module BoolFormula =
-        let rec eval (valuation : int -> bool) (f : BoolFormula) : bool =
-            match f with
-            | True -> true
-            | False -> false
-            | Atom i -> valuation i
-            | Not f -> not (eval valuation f)
-            | Branch (cond, thenF, elseF) ->
-                if eval valuation cond then
-                    eval valuation thenF
-                else
-                    eval valuation elseF
+        // `toFormula` memoizes substituted `let` bindings, so a formula may be a DAG (an alias read
+        // twice shares one node). We must traverse it by node identity, or a chain like
+        // `bN = bPrev && bPrev` — linear to build — takes 2^N to walk. The per-call reference-keyed
+        // cache makes every traversal linear in the number of distinct nodes.
+        let eval (valuation : int -> bool) (f : BoolFormula) : bool =
+            let cache =
+                System.Collections.Generic.Dictionary<BoolFormula, bool> (HashIdentity.Reference)
 
-        let rec atoms (f : BoolFormula) : Set<int> =
-            match f with
-            | True
-            | False -> Set.empty
-            | Atom i -> Set.singleton i
-            | Not g -> atoms g
-            | Branch (a, b, c) -> Set.unionMany [ atoms a ; atoms b ; atoms c ]
+            let rec go f =
+                match cache.TryGetValue f with
+                | true, v -> v
+                | false, _ ->
+                    let v =
+                        match f with
+                        | True -> true
+                        | False -> false
+                        | Atom i -> valuation i
+                        | Not g -> not (go g)
+                        | Branch (cond, thenF, elseF) -> if go cond then go thenF else go elseF
+
+                    cache.[f] <- v
+                    v
+
+            go f
+
+        let atoms (f : BoolFormula) : Set<int> =
+            let cache =
+                System.Collections.Generic.Dictionary<BoolFormula, Set<int>> (HashIdentity.Reference)
+
+            let rec go f =
+                match cache.TryGetValue f with
+                | true, s -> s
+                | false, _ ->
+                    let s =
+                        match f with
+                        | True
+                        | False -> Set.empty
+                        | Atom i -> Set.singleton i
+                        | Not g -> go g
+                        | Branch (a, b, c) -> Set.unionMany [ go a ; go b ; go c ]
+
+                    cache.[f] <- s
+                    s
+
+            go f
 
     [<RequireQualifiedAccess>]
     type BitOp =
@@ -515,6 +541,9 @@ module TaskCompletionSourceAnalyzer =
             walkExpr violations env pathConds guard
             // The body only runs while the guard holds, so it holds at the top of every iteration.
             walkExpr violations env ((guard, true) :: pathConds) body
+        // A quotation builds a code-as-data `Expr`; its body is not executed, so any constructor
+        // syntax inside it must not be analysed as a real call.
+        | Quote _ -> ()
         | _ ->
             for sub in expr.ImmediateSubExpressions do
                 walkExpr violations env pathConds sub

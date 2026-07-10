@@ -2,9 +2,9 @@ module TaskCompletionSourceDeepLetChain
 
 open System.Threading.Tasks
 
-// Each alias references its predecessor twice. Substituting naively would duplicate the whole
-// prior formula at every level (~2^28 nodes); memoization keeps it linear. The flag is still
-// conditional on `p`, so this is a genuine warning.
+// Each alias reads its predecessor twice, so the guard formula is a DAG that is linear to build
+// but would take 2^40 to traverse if walked as a tree. Memoized construction *and* traversal
+// keep this instant; the flag is still conditional on `p`, so this is a genuine warning.
 let createTcs (p : bool) =
     let b0 = p
     let b1 = b0 && b0
@@ -35,10 +35,22 @@ let createTcs (p : bool) =
     let b26 = b25 && b25
     let b27 = b26 && b26
     let b28 = b27 && b27
+    let b29 = b28 && b28
+    let b30 = b29 && b29
+    let b31 = b30 && b30
+    let b32 = b31 && b31
+    let b33 = b32 && b32
+    let b34 = b33 && b33
+    let b35 = b34 && b34
+    let b36 = b35 && b35
+    let b37 = b36 && b36
+    let b38 = b37 && b37
+    let b39 = b38 && b38
+    let b40 = b39 && b39
 
     let tcs =
         TaskCompletionSource<int> (
-            if b28 then
+            if b40 then
                 TaskCreationOptions.RunContinuationsAsynchronously
             else
                 TaskCreationOptions.None
