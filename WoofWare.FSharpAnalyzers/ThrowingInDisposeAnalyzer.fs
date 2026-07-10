@@ -24,19 +24,6 @@ module ThrowingInDisposeAnalyzer =
         ]
         |> Map.ofList
 
-    /// Check if a type implements IDisposable
-    let implementsIDisposable (typ : FSharpType) =
-        if not typ.HasTypeDefinition then
-            false
-        else
-
-        typ.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
-        || (typ.TypeDefinition.AllInterfaces
-            |> Seq.exists (fun iface ->
-                iface.HasTypeDefinition
-                && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
-            ))
-
     /// Check if a member is a Dispose method (either IDisposable.Dispose or Dispose(bool))
     let isDisposeMember (mfv : FSharpMemberOrFunctionOrValue) =
         // Check for both "Dispose" and "System.IDisposable.Dispose" (explicit interface implementation)
@@ -49,41 +36,54 @@ module ThrowingInDisposeAnalyzer =
                     && abs.DeclaringType.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
                 )
 
-            // Check if this overrides an abstract parameterless `Dispose` slot declared on a
-            // disposable base class. This is the effective disposal hook in the pattern where a
-            // base class implements `IDisposable.Dispose ()` by delegating to an abstract
-            // `Dispose ()` that derived classes override: FCS reports the override's implemented
-            // signature as `Base.Dispose`, not `System.IDisposable.Dispose`, so the check above
-            // misses it. Requiring the slot to be parameterless keeps unrelated overloads such as
-            // an abstract `Dispose (reason : string)` unflagged.
-            let overridesDisposalHook =
-                mfv.ImplementedAbstractSignatures
-                |> Seq.exists (fun abs ->
-                    abs.Name = "Dispose"
-                    && (abs.AbstractArguments |> Seq.sumBy Seq.length) = 0
-                    && implementsIDisposable abs.DeclaringType
-                )
+            // Whether the type declaring this member implements IDisposable, directly or via a
+            // base class.
+            let enclosingTypeIsDisposable =
+                match mfv.DeclaringEntity with
+                | Some entity ->
+                    entity.AllInterfaces
+                    |> Seq.exists (fun iface ->
+                        iface.HasTypeDefinition
+                        && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
+                    )
+                | None -> false
 
-            // Check if it's a Dispose(bool) helper method (common dispose pattern).
+            // A `Dispose` member on a disposable type counts as disposal only if its signature is
+            // disposal-shaped; an unrelated overload such as `Dispose (reason : string)` has
+            // nothing to do with disposal and must not be flagged. Two shapes qualify:
             //
-            // We deliberately do NOT treat every `Dispose` overload on an IDisposable type as
-            // lifecycle disposal: an unrelated overload such as `Dispose(reason : string)` has
-            // nothing to do with disposal, so we key off the disposal-shaped signatures only. The
-            // genuine `IDisposable.Dispose()` is caught by `implementsIDisposableDispose` above; the
-            // `Dispose(bool)` protected helper of the classic dispose pattern is caught here.
+            // * `Dispose ()`: the effective disposal method in the pattern where the explicit
+            //   `IDisposable.Dispose` implementation merely delegates to a public `Dispose ()`,
+            //   and likewise when a base class delegates to an abstract `Dispose ()` hook that
+            //   derived classes override. (FCS reports such an override's implemented signature
+            //   as `Base.Dispose`, not `System.IDisposable.Dispose`, so
+            //   `implementsIDisposableDispose` misses it; and the disposable interface may only
+            //   be introduced partway down the hierarchy, so we key off the enclosing type
+            //   rather than the abstract slot's declaring type.)
+            // * `Dispose (disposing : bool)`: the protected helper of the classic dispose
+            //   pattern.
             //
-            // Note the parameter type is the F# abbreviation `bool`, so we must strip abbreviations
-            // before comparing against the underlying `System.Boolean`.
-            let isDisposeBool =
-                if mfv.CurriedParameterGroups.Count = 1 && mfv.CurriedParameterGroups.[0].Count = 1 then
+            // Note the parameter types are the F# abbreviations `unit`/`bool`, so we must strip
+            // abbreviations before comparing against the underlying types.
+            let isDisposalShaped =
+                if mfv.CurriedParameterGroups.Count = 0 then
+                    true
+                elif mfv.CurriedParameterGroups.Count = 1 && mfv.CurriedParameterGroups.[0].Count = 0 then
+                    true
+                elif mfv.CurriedParameterGroups.Count = 1 && mfv.CurriedParameterGroups.[0].Count = 1 then
                     let paramType = mfv.CurriedParameterGroups.[0].[0].Type.StripAbbreviations ()
 
                     paramType.HasTypeDefinition
-                    && paramType.TypeDefinition.TryGetFullName () = Some "System.Boolean"
+                    && (
+                        match paramType.TypeDefinition.TryGetFullName () with
+                        | Some "Microsoft.FSharp.Core.Unit"
+                        | Some "System.Boolean" -> true
+                        | _ -> false
+                    )
                 else
                     false
 
-            implementsIDisposableDispose || overridesDisposalHook || isDisposeBool
+            implementsIDisposableDispose || (enclosingTypeIsDisposable && isDisposalShaped)
         else
             false
 
@@ -127,6 +127,19 @@ module ThrowingInDisposeAnalyzer =
             // Walk all sub-expressions
             expr.ImmediateSubExpressions
             |> Seq.iter (fun subExpr -> findThrowCalls subExpr violations)
+
+    /// Check if a type implements IDisposable
+    let implementsIDisposable (typ : FSharpType) =
+        if not typ.HasTypeDefinition then
+            false
+        else
+
+        typ.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
+        || (typ.TypeDefinition.AllInterfaces
+            |> Seq.exists (fun iface ->
+                iface.HasTypeDefinition
+                && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
+            ))
 
     /// Recursively walk expressions to find object expressions implementing IDisposable
     let rec findObjectExpressions (expr : FSharpExpr) (violations : ResizeArray<range * string>) =
