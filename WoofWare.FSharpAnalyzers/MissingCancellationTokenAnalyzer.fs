@@ -46,31 +46,53 @@ module MissingCancellationTokenAnalyzer =
         else
             typ
 
-    /// Structural equality of types, up to type abbreviations. Distinguishes generic
-    /// instantiations (e.g. List<int> vs List<string>) and array element types.
-    let rec typesMatch (ty1 : FSharpType) (ty2 : FSharpType) : bool =
-        let ty1 = stripAbbreviations ty1
-        let ty2 = stripAbbreviations ty2
+    /// Structural equality of types, up to type abbreviations and alpha-renaming of the
+    /// two members' generic parameters (matched by binder position, not name).
+    /// Distinguishes generic instantiations (e.g. List<int> vs List<string>) and array
+    /// element types.
+    let typesMatch
+        (typars1 : FSharpGenericParameter seq)
+        (typars2 : FSharpGenericParameter seq)
+        (ty1 : FSharpType)
+        (ty2 : FSharpType)
+        : bool
+        =
+        let tryBinderIndex (typars : FSharpGenericParameter seq) (p : FSharpGenericParameter) =
+            typars |> Seq.tryFindIndex (fun q -> q.Name = p.Name)
 
-        let genericArgumentsMatch () =
-            ty1.GenericArguments.Count = ty2.GenericArguments.Count
-            && Seq.forall2 typesMatch ty1.GenericArguments ty2.GenericArguments
+        let rec go (ty1 : FSharpType) (ty2 : FSharpType) : bool =
+            let ty1 = stripAbbreviations ty1
+            let ty2 = stripAbbreviations ty2
 
-        if ty1.IsGenericParameter && ty2.IsGenericParameter then
-            ty1.GenericParameter.Name = ty2.GenericParameter.Name
-        elif ty1.HasTypeDefinition && ty2.HasTypeDefinition then
-            // Arrays land here too: the type definition is the array type constructor
-            // (per rank), and the element type is a generic argument.
-            ty1.TypeDefinition = ty2.TypeDefinition && genericArgumentsMatch ()
-        elif ty1.IsTupleType && ty2.IsTupleType then
-            ty1.IsStructTupleType = ty2.IsStructTupleType && genericArgumentsMatch ()
-        elif ty1.IsFunctionType && ty2.IsFunctionType then
-            genericArgumentsMatch ()
-        elif ty1.IsAnonRecordType && ty2.IsAnonRecordType then
-            ty1.AnonRecordTypeDetails.SortedFieldNames = ty2.AnonRecordTypeDetails.SortedFieldNames
-            && genericArgumentsMatch ()
-        else
-            false
+            let genericArgumentsMatch () =
+                ty1.GenericArguments.Count = ty2.GenericArguments.Count
+                && Seq.forall2 go ty1.GenericArguments ty2.GenericArguments
+
+            if ty1.IsGenericParameter && ty2.IsGenericParameter then
+                match tryBinderIndex typars1 ty1.GenericParameter, tryBinderIndex typars2 ty2.GenericParameter with
+                | Some i1, Some i2 -> i1 = i2
+                | None, None ->
+                    // Neither binder belongs to its member, so both come from an enclosing
+                    // scope (e.g. the declaring class). Overloads live on the same entity,
+                    // so those binders are shared and names identify them.
+                    ty1.GenericParameter.Name = ty2.GenericParameter.Name
+                | Some _, None
+                | None, Some _ -> false
+            elif ty1.HasTypeDefinition && ty2.HasTypeDefinition then
+                // Arrays land here too: the type definition is the array type constructor
+                // (per rank), and the element type is a generic argument.
+                ty1.TypeDefinition = ty2.TypeDefinition && genericArgumentsMatch ()
+            elif ty1.IsTupleType && ty2.IsTupleType then
+                ty1.IsStructTupleType = ty2.IsStructTupleType && genericArgumentsMatch ()
+            elif ty1.IsFunctionType && ty2.IsFunctionType then
+                genericArgumentsMatch ()
+            elif ty1.IsAnonRecordType && ty2.IsAnonRecordType then
+                ty1.AnonRecordTypeDetails.SortedFieldNames = ty2.AnonRecordTypeDetails.SortedFieldNames
+                && genericArgumentsMatch ()
+            else
+                false
+
+        go ty1 ty2
 
     /// Get parameter types for comparison, excluding CancellationToken parameters but
     /// preserving the curried-group structure (groups left empty by the exclusion are
@@ -86,11 +108,18 @@ module MissingCancellationTokenAnalyzer =
         |> Seq.filter (not << List.isEmpty)
         |> Seq.toList
 
-    let signaturesMatch (sig1 : FSharpType list list) (sig2 : FSharpType list list) : bool =
+    let signaturesMatch
+        (typars1 : FSharpGenericParameter seq)
+        (typars2 : FSharpGenericParameter seq)
+        (sig1 : FSharpType list list)
+        (sig2 : FSharpType list list)
+        : bool
+        =
         sig1.Length = sig2.Length
         && List.forall2
             (fun (group1 : FSharpType list) (group2 : FSharpType list) ->
-                group1.Length = group2.Length && List.forall2 typesMatch group1 group2
+                group1.Length = group2.Length
+                && List.forall2 (typesMatch typars1 typars2) group1 group2
             )
             sig1
             sig2
@@ -110,9 +139,13 @@ module MissingCancellationTokenAnalyzer =
                 // Has CancellationToken parameter
                 && hasCancellationTokenParam m
                 // Same parameters (except for the CancellationToken)
-                && signaturesMatch (getParameterSignature m) currentParamSignature
+                && signaturesMatch
+                    m.GenericParameters
+                    mfv.GenericParameters
+                    (getParameterSignature m)
+                    currentParamSignature
                 // Same return type, so the overload is a drop-in replacement
-                && typesMatch m.ReturnParameter.Type mfv.ReturnParameter.Type
+                && typesMatch m.GenericParameters mfv.GenericParameters m.ReturnParameter.Type mfv.ReturnParameter.Type
             )
         | None -> false
 
