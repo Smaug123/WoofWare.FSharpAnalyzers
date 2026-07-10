@@ -24,6 +24,11 @@ module BlockingCallsAnalyzer =
             "System.Runtime.CompilerServices.TaskAwaiter`1.GetResult"
             "System.Runtime.CompilerServices.ValueTaskAwaiter.GetResult"
             "System.Runtime.CompilerServices.ValueTaskAwaiter`1.GetResult"
+            // Configured awaiters, produced by `.ConfigureAwait(...)`
+            "System.Runtime.CompilerServices.ConfiguredTaskAwaitable.ConfiguredTaskAwaiter.GetResult"
+            "System.Runtime.CompilerServices.ConfiguredTaskAwaitable`1.ConfiguredTaskAwaiter.GetResult"
+            "System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable.ConfiguredValueTaskAwaiter.GetResult"
+            "System.Runtime.CompilerServices.ConfiguredValueTaskAwaitable`1.ConfiguredValueTaskAwaiter.GetResult"
         ]
         |> Set.ofList
 
