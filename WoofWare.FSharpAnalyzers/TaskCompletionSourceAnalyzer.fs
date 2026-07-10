@@ -382,6 +382,10 @@ module TaskCompletionSourceAnalyzer =
 
         member _.OpaqueDependsOnFree = opaqueVars.Overlaps freeVars
 
+        /// Does any free atom read one of these values? Used to detect when a guard reads a variable
+        /// whose reachability is constrained by machinery we don't model (a `match` guard).
+        member _.ReadsAnyFreeVar (vars : FSharpMemberOrFunctionOrValue seq) = freeVars.Overlaps vars
+
         /// Record that an opaque guard reads these values, so a dependence on a free variable is caught.
         member _.NoteOpaqueReads (vars : FSharpMemberOrFunctionOrValue seq) =
             for v in vars do
@@ -500,7 +504,13 @@ module TaskCompletionSourceAnalyzer =
     /// declaration and this expression. They are converted with the same atom allocator as the
     /// options expression, so a variable read as an enclosing guard is identified with the same read
     /// inside the options.
-    let flagFacts (env : Env) (pathConds : (FSharpExpr * bool) list) (expr : FSharpExpr) : FlagFacts =
+    let flagFacts
+        (env : Env)
+        (constrainedVars : FSharpMemberOrFunctionOrValue list)
+        (pathConds : (FSharpExpr * bool) list)
+        (expr : FSharpExpr)
+        : FlagFacts
+        =
         let atoms = AtomAllocator ()
         let condFormulas = pathConds |> List.map (fun (e, b) -> toFormula env atoms e, b)
         let tree = toBitTree env atoms expr
@@ -509,12 +519,17 @@ module TaskCompletionSourceAnalyzer =
             // An opaque guard is a function of a free variable; the two are not independent, so
             // enumerating them separately would admit impossible combinations. Give up.
             FlagFacts.unknown
+        elif atoms.ReadsAnyFreeVar constrainedVars then
+            // A guard reads a `match`-bound variable whose reachability the compiled decision tree
+            // constrains (e.g. a `when` guard) in ways we don't model, so we can't treat it as free.
+            FlagFacts.unknown
         else
             BitTree.flagFactsUnder atoms.IsFree condFormulas tree
 
     let checkTaskCompletionSourceCall
         (violations : ResizeArray<range>)
         (env : Env)
+        (constrainedVars : FSharpMemberOrFunctionOrValue list)
         (pathConds : (FSharpExpr * bool) list)
         (mfv : FSharpMemberOrFunctionOrValue)
         (args : FSharpExpr list)
@@ -542,54 +557,67 @@ module TaskCompletionSourceAnalyzer =
                     | [] -> true // No TaskCreationOptions argument at all
                     | opts ->
                         opts
-                        |> List.exists (fun opt -> (flagFacts env pathConds opt).SomePathLacks = Some true)
+                        |> List.exists (fun opt ->
+                            (flagFacts env constrainedVars pathConds opt).SomePathLacks = Some true
+                        )
 
                 if hasViolation then
                     violations.Add m
 
     /// Walk an expression, threading (a) the enclosing branch conditions, so constraints established
-    /// before reaching a constructor are available when its options argument is analysed, and (b) the
+    /// before reaching a constructor are available when its options argument is analysed, (b) the
     /// definitions of immutable local `let` bindings, so a guard reading such a value knows its
-    /// definition. If/then/else (which also covers the desugaring of && and ||) and a `while` guard
-    /// refine the path condition; `let` extends the environment; other control flow recurses unchanged.
+    /// definition, and (c) the variables bound by `match` targets, whose reachability the compiled
+    /// decision tree constrains in ways we don't model. If/then/else (which also covers the desugaring
+    /// of && and ||) and a `while` guard refine the path condition; `let` extends the environment;
+    /// `match` targets extend the constrained set; other control flow recurses unchanged.
     let rec private walkExpr
         (violations : ResizeArray<range>)
         (env : Env)
+        (constrainedVars : FSharpMemberOrFunctionOrValue list)
         (pathConds : (FSharpExpr * bool) list)
         (expr : FSharpExpr)
         =
         match expr with
-        | NewObject (mfv, _typeArgs, args) -> checkTaskCompletionSourceCall violations env pathConds mfv args expr.Range
-        | Call (_, mfv, _, _, args) -> checkTaskCompletionSourceCall violations env pathConds mfv args expr.Range
+        | NewObject (mfv, _typeArgs, args) ->
+            checkTaskCompletionSourceCall violations env constrainedVars pathConds mfv args expr.Range
+        | Call (_, mfv, _, _, args) ->
+            checkTaskCompletionSourceCall violations env constrainedVars pathConds mfv args expr.Range
         | _ -> ()
 
         match expr with
         | IfThenElse (cond, thenExpr, elseExpr) ->
-            walkExpr violations env pathConds cond
-            walkExpr violations env ((cond, true) :: pathConds) thenExpr
-            walkExpr violations env ((cond, false) :: pathConds) elseExpr
+            walkExpr violations env constrainedVars pathConds cond
+            walkExpr violations env constrainedVars ((cond, true) :: pathConds) thenExpr
+            walkExpr violations env constrainedVars ((cond, false) :: pathConds) elseExpr
         | Let ((v, rhs, _debugPoint), body) ->
-            walkExpr violations env pathConds rhs
+            walkExpr violations env constrainedVars pathConds rhs
             let env = if v.IsMutable then env else (v, rhs) :: env
-            walkExpr violations env pathConds body
+            walkExpr violations env constrainedVars pathConds body
         | WhileLoop (guard, body, _debugPoint) ->
-            walkExpr violations env pathConds guard
+            walkExpr violations env constrainedVars pathConds guard
             // The body only runs while the guard holds, so it holds at the top of every iteration.
-            walkExpr violations env ((guard, true) :: pathConds) body
+            walkExpr violations env constrainedVars ((guard, true) :: pathConds) body
+        | DecisionTree (decision, targets) ->
+            walkExpr violations env constrainedVars pathConds decision
+            // Each target's pattern-bound variables may be gated by a `when` guard, which lives in the
+            // decision above rather than on the path here, so we treat them conservatively.
+            for boundVars, target in targets do
+                walkExpr violations env (boundVars @ constrainedVars) pathConds target
         // A quotation builds a code-as-data `Expr`; its body is not executed, so any constructor
         // syntax inside it must not be analysed as a real call.
         | Quote _ -> ()
         | _ ->
             for sub in expr.ImmediateSubExpressions do
-                walkExpr violations env pathConds sub
+                walkExpr violations env constrainedVars pathConds sub
 
     let rec private walkDeclaration (violations : ResizeArray<range>) (decl : FSharpImplementationFileDeclaration) =
         match decl with
         | FSharpImplementationFileDeclaration.Entity (_, subDecls) ->
             for subDecl in subDecls do
                 walkDeclaration violations subDecl
-        | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (_, _, body) -> walkExpr violations [] [] body
-        | FSharpImplementationFileDeclaration.InitAction expr -> walkExpr violations [] [] expr
+        | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (_, _, body) -> walkExpr violations [] [] [] body
+        | FSharpImplementationFileDeclaration.InitAction expr -> walkExpr violations [] [] [] expr
 
     let analyzeTypedTree (typedTree : FSharpImplementationFileContents) =
         let violations = ResizeArray<range> ()
