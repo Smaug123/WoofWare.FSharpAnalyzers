@@ -32,6 +32,17 @@ module ThrowingInDisposeAnalyzer =
             && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
         )
 
+    /// The number of generic parameters belonging to the member itself.
+    /// (GenericParameters may include the enclosing type's parameters; only parameters
+    /// beyond those count as the member's own.)
+    let private ownGenericArity (mfv : FSharpMemberOrFunctionOrValue) =
+        let enclosingCount =
+            match mfv.DeclaringEntity with
+            | Some entity -> entity.GenericParameters.Count
+            | None -> 0
+
+        max 0 (mfv.GenericParameters.Count - enclosingCount)
+
     /// Check if a member is a Dispose method (either IDisposable.Dispose or Dispose(bool)),
     /// judging by local evidence alone: the member's own signature and its declaring type.
     /// This misses disposal helpers that only *delegation* identifies (e.g. a helper
@@ -107,17 +118,7 @@ module ThrowingInDisposeAnalyzer =
                     ret.HasTypeDefinition
                     && ret.TypeDefinition.TryGetFullName () = Some "Microsoft.FSharp.Core.Unit"
 
-                let hasOwnGenericParameters =
-                    // GenericParameters may include the enclosing type's parameters; only
-                    // parameters beyond those count as the member's own.
-                    let enclosingCount =
-                        match mfv.DeclaringEntity with
-                        | Some entity -> entity.GenericParameters.Count
-                        | None -> 0
-
-                    mfv.GenericParameters.Count > enclosingCount
-
-                mfv.IsInstanceMember && returnsUnit && not hasOwnGenericParameters
+                mfv.IsInstanceMember && returnsUnit && ownGenericArity mfv = 0
 
             implementsIDisposableDispose
             || (enclosingTypeIsDisposable && isDisposalShaped && hasDisposalSignature)
@@ -150,13 +151,16 @@ module ThrowingInDisposeAnalyzer =
             "<other>"
 
     let private parameterKeys (paramTypes : FSharpType seq) : string =
-        paramTypes
-        |> Seq.map typeKey
-        // A lone unit parameter and an empty parameter list are the same member shape;
+        let keys = paramTypes |> Seq.map typeKey |> List.ofSeq
+
+        // A *lone* unit parameter and an empty parameter list are the same member shape;
         // normalise so that keys computed from declarations, call sites, and abstract slots
-        // all agree.
-        |> Seq.filter (fun key -> key <> "Microsoft.FSharp.Core.Unit")
-        |> String.concat ","
+        // all agree. A unit parameter alongside others is a genuine argument, though, and
+        // must stay: `Dispose (u : unit, x : int)` is a different overload from
+        // `Dispose (x : int)`.
+        match keys with
+        | [ "Microsoft.FSharp.Core.Unit" ] -> ""
+        | keys -> String.concat "," keys
 
     /// A key identifying a member such that the same member observed at a call site and at
     /// its declaration produces the same key. None if the member has no named declaring
@@ -171,31 +175,49 @@ module ThrowingInDisposeAnalyzer =
                 |> Seq.map (fun p -> p.Type)
                 |> parameterKeys
 
-            Some $"%s{entityName}::%s{mfv.CompiledName}(%s{paramTypes})"
+            Some $"%s{entityName}::%s{mfv.CompiledName}`%d{ownGenericArity mfv}(%s{paramTypes})"
 
     /// The keys under which a member declaration answers calls: its own key, plus the keys
     /// of any abstract slots it implements. (A virtual call is reported against the slot's
     /// declaring type, while the body lives on the overriding type, which may be elsewhere
     /// in the hierarchy.)
-    let private answeringKeys (mfv : FSharpMemberOrFunctionOrValue) : string list =
-        let slotKeys =
-            mfv.ImplementedAbstractSignatures
-            |> Seq.choose (fun abs ->
-                if abs.DeclaringType.HasTypeDefinition then
-                    match abs.DeclaringType.TypeDefinition.TryGetFullName () with
-                    | Some entityName ->
-                        let paramTypes =
-                            abs.AbstractArguments
-                            |> Seq.collect id
-                            |> Seq.map (fun p -> p.Type)
-                            |> parameterKeys
+    ///
+    /// `disposalReceiverTypes` contains the full names of every type an instance of which
+    /// can be disposed (the file's disposable types and their base classes). An override
+    /// answers its slot's key only if its declaring type is such a type: otherwise no
+    /// disposal can ever dispatch to it (e.g. a throwing override on a non-disposable
+    /// sibling of the type whose disposal calls the slot).
+    let private answeringKeys
+        (disposalReceiverTypes : Set<string>)
+        (mfv : FSharpMemberOrFunctionOrValue)
+        : string list
+        =
+        let declaringTypeCanBeDisposed =
+            match mfv.DeclaringEntity |> Option.bind (fun e -> e.TryGetFullName ()) with
+            | Some name -> Set.contains name disposalReceiverTypes
+            | None -> false
 
-                        Some $"%s{entityName}::%s{abs.Name}(%s{paramTypes})"
-                    | None -> None
-                else
-                    None
-            )
-            |> List.ofSeq
+        let slotKeys =
+            if not declaringTypeCanBeDisposed then
+                []
+            else
+                mfv.ImplementedAbstractSignatures
+                |> Seq.choose (fun abs ->
+                    if abs.DeclaringType.HasTypeDefinition then
+                        match abs.DeclaringType.TypeDefinition.TryGetFullName () with
+                        | Some entityName ->
+                            let paramTypes =
+                                abs.AbstractArguments
+                                |> Seq.collect id
+                                |> Seq.map (fun p -> p.Type)
+                                |> parameterKeys
+
+                            Some $"%s{entityName}::%s{abs.Name}`%d{abs.MethodGenericParameters.Count}(%s{paramTypes})"
+                        | None -> None
+                    else
+                        None
+                )
+                |> List.ofSeq
 
         (memberKey mfv |> Option.toList) @ slotKeys
 
@@ -318,8 +340,9 @@ module ThrowingInDisposeAnalyzer =
     let analyze (typedTree : FSharpImplementationFileContents) =
         let violations = ResizeArray<range * string> ()
 
-        // Collect all member declarations (and init actions) up front: identifying the
-        // disposal members requires a whole-file view before any body can be checked.
+        // Collect all declarations up front: identifying the disposal members requires a
+        // whole-file view before any body can be checked.
+        let entities = ResizeArray<FSharpEntity> ()
         let memberDecls = ResizeArray<FSharpMemberOrFunctionOrValue * FSharpExpr> ()
         let initActions = ResizeArray<FSharpExpr> ()
 
@@ -327,13 +350,40 @@ module ThrowingInDisposeAnalyzer =
             decls
             |> List.iter (fun decl ->
                 match decl with
-                | FSharpImplementationFileDeclaration.Entity (_, subDecls) -> collectDeclarations subDecls
+                | FSharpImplementationFileDeclaration.Entity (entity, subDecls) ->
+                    entities.Add entity
+                    collectDeclarations subDecls
                 | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (mfv, _, expr) ->
                     memberDecls.Add (mfv, expr)
                 | FSharpImplementationFileDeclaration.InitAction expr -> initActions.Add expr
             )
 
         collectDeclarations typedTree.Declarations
+
+        // Full names of every type an instance of which can be disposed: the file's
+        // disposable types together with all their base classes. (A disposable subclass
+        // declared in a *different* file will not be seen here; that false negative is
+        // inherent to per-file analysis.)
+        let disposalReceiverTypes =
+            let rec selfAndBases (typ : FSharpType option) =
+                seq {
+                    match typ with
+                    | Some typ when typ.HasTypeDefinition ->
+                        let def = (typ.StripAbbreviations ()).TypeDefinition
+                        yield def
+                        yield! selfAndBases def.BaseType
+                    | _ -> ()
+                }
+
+            entities
+            |> Seq.filter (fun entity ->
+                not entity.IsNamespace && not entity.IsFSharpModule && entityIsDisposable entity
+            )
+            |> Seq.collect (fun entity -> Seq.append (Seq.singleton entity) (selfAndBases entity.BaseType))
+            |> Seq.choose (fun entity -> entity.TryGetFullName ())
+            |> Set.ofSeq
+
+        let answeringKeys = answeringKeys disposalReceiverTypes
 
         // Disposal is often delegated to a member that local evidence alone does not
         // identify as disposal: a helper inherited from a non-disposable base class, or a
@@ -361,6 +411,8 @@ module ThrowingInDisposeAnalyzer =
             let isFinalizer (mfv : FSharpMemberOrFunctionOrValue) =
                 mfv.CompiledName = "Finalize"
                 && mfv.IsInstanceMember
+                // An ordinary member that merely *hides* Object.Finalize is not a finalizer.
+                && mfv.IsOverrideOrExplicitInterfaceImplementation
                 && (mfv.CurriedParameterGroups
                     |> Seq.collect id
                     |> Seq.forall (fun p -> typeKey p.Type = "Microsoft.FSharp.Core.Unit"))
