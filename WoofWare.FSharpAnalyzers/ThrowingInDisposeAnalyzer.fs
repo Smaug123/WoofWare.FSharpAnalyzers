@@ -199,7 +199,16 @@ module ThrowingInDisposeAnalyzer =
         )
         |> List.ofSeq
 
-    /// The full names of an entity and all its base classes, most-derived first
+    /// The full names of an entity and all its base classes, most-derived first.
+    ///
+    /// Deliberate approximation: this compares type *definitions*, ignoring generic
+    /// instantiation, so hierarchies under `Base<int>` and `Base<string>` are conflated
+    /// when bounding virtual dispatch. Distinguishing them by rendering constructed types
+    /// would be wrong in the other direction (a generic subclass `Sub<'T> : Base<'T>`
+    /// renders as `Base<<generic>>` and would never match a `Base<int>` receiver);
+    /// doing it properly requires type unification, which is not worth the complexity
+    /// for a per-file lint. We err towards over-reporting in same-file hierarchies that
+    /// mix instantiations of one generic base.
     let rec private selfAndAncestorNames (entity : FSharpEntity) : string list =
         let self = entity.TryGetFullName () |> Option.toList
 
@@ -359,11 +368,18 @@ module ThrowingInDisposeAnalyzer =
         //
         // The result is the set of indices into memberDecls of the reached declarations.
         let reachedDecls : System.Collections.Generic.HashSet<int> =
-            // Same-file Dispose-named declarations, which a traced call can resolve to.
+            // Same-file declarations a traced Dispose call can resolve to: members compiled
+            // as `Dispose`, plus explicit implementations of a Dispose-named slot (an
+            // implementation of a user-defined interface's `Dispose` is compiled as e.g.
+            // `Namespace.ICleanup.Dispose`, not `Dispose`).
             let disposeDecls =
                 memberDecls
                 |> Seq.indexed
-                |> Seq.filter (fun (_, (mfv, _)) -> mfv.CompiledName = "Dispose")
+                |> Seq.filter (fun (_, (mfv, _)) ->
+                    mfv.CompiledName = "Dispose"
+                    || mfv.ImplementedAbstractSignatures
+                       |> Seq.exists (fun abs -> abs.Name = "Dispose")
+                )
                 |> Seq.map (fun (i, (mfv, expr)) -> i, mfv, expr, memberKey mfv, slotKeys mfv)
                 |> List.ofSeq
 
@@ -430,7 +446,8 @@ module ThrowingInDisposeAnalyzer =
                                     |> List.map fst
 
                         // An override on a subtype of the receiver can execute whenever the
-                        // dynamic type is that subtype (or below).
+                        // dynamic type is that subtype (or below). For an interface
+                        // receiver, every implementing type is such a "subtype".
                         let descendantSide =
                             let receiverName = receiverEntity.TryGetFullName ()
 
@@ -442,7 +459,12 @@ module ThrowingInDisposeAnalyzer =
                                     // receiver's own chain are handled (with shadowing)
                                     // above.
                                     not (List.contains name receiverChain)
-                                    && List.contains receiverName (selfAndAncestorNames entity)
+                                    && (List.contains receiverName (selfAndAncestorNames entity)
+                                        || (entity.AllInterfaces
+                                            |> Seq.exists (fun iface ->
+                                                iface.HasTypeDefinition
+                                                && iface.TypeDefinition.TryGetFullName () = Some receiverName
+                                            )))
                                 | _ -> false
                             )
                             |> List.map fst
