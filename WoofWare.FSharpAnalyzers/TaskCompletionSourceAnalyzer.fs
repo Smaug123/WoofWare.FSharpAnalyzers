@@ -69,8 +69,8 @@ module TaskCompletionSourceAnalyzer =
                 SomePathHas = f.SomePathLacks
             }
 
-        /// A conditional whose branches are both assumed reachable: the paths of the result are the
-        /// union of the paths of the branches.
+        /// Combine facts over two reachable classes of paths: the result describes the union of the
+        /// two sets of paths.
         let join (a : FlagFacts) (b : FlagFacts) =
             let combine x y =
                 match x, y with
@@ -130,37 +130,161 @@ module TaskCompletionSourceAnalyzer =
                 // both operands vary across paths, and their paths may be correlated
                 unknown
 
+    /// The boolean structure of a conditional's guard. Atoms are subexpressions we can't analyse;
+    /// two atom occurrences share an index exactly when they are reads of the same immutable value,
+    /// so a valuation of the atoms determines the formula's value.
+    type BoolFormula =
+        | True
+        | False
+        | Atom of int
+        | Not of BoolFormula
+        | Branch of BoolFormula * BoolFormula * BoolFormula
+
+    [<RequireQualifiedAccess>]
+    module BoolFormula =
+        let rec eval (valuation : int -> bool) (f : BoolFormula) : bool =
+            match f with
+            | True -> true
+            | False -> false
+            | Atom i -> valuation i
+            | Not f -> not (eval valuation f)
+            | Branch (cond, thenF, elseF) ->
+                if eval valuation cond then
+                    eval valuation thenF
+                else
+                    eval valuation elseF
+
+    [<RequireQualifiedAccess>]
+    type BitOp =
+        | Or
+        | And
+        | Xor
+
+    /// A TaskCreationOptions expression reduced to the parts that determine the
+    /// RunContinuationsAsynchronously bit.
+    type BitTree =
+        | Leaf of FlagFacts
+        | Cond of BoolFormula * BitTree * BitTree
+        | Op of BitOp * BitTree * BitTree
+
+    /// Above this many distinct condition atoms we give up on enumerating valuations.
+    [<Literal>]
+    let AtomCap = 10
+
+    [<RequireQualifiedAccess>]
+    module BitTree =
+        /// Facts about the bit under one fixed valuation of the condition atoms.
+        let rec eval (valuation : int -> bool) (t : BitTree) : FlagFacts =
+            match t with
+            | BitTree.Leaf facts -> facts
+            | BitTree.Cond (cond, thenTree, elseTree) ->
+                if BoolFormula.eval valuation cond then
+                    eval valuation thenTree
+                else
+                    eval valuation elseTree
+            | BitTree.Op (op, lhs, rhs) ->
+                let lhs = eval valuation lhs
+                let rhs = eval valuation rhs
+
+                match op with
+                | BitOp.Or -> FlagFacts.bitwiseOr lhs rhs
+                | BitOp.And -> FlagFacts.bitwiseAnd lhs rhs
+                | BitOp.Xor -> FlagFacts.bitwiseXor lhs rhs
+
+        /// Facts about the bit across all paths: every valuation of the condition atoms is a
+        /// reachable class of paths (atoms are free booleans by construction), so we enumerate the
+        /// valuations and join. Infeasible branches thus contribute nothing, and conditionals
+        /// sharing an atom resolve consistently. Gives up (no information) past AtomCap atoms.
+        let flagFacts (atomCount : int) (t : BitTree) : FlagFacts =
+            if atomCount > AtomCap then
+                FlagFacts.unknown
+            else
+                Seq.init (1 <<< atomCount) (fun mask -> eval (fun i -> ((mask >>> i) &&& 1) = 1) t)
+                |> Seq.reduce FlagFacts.join
+
     let runContinuationsAsynchronouslyBit =
         int64 System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
+
+    /// Is this the FSharp.Core operator with the given compiled name (as opposed to a shadowing
+    /// user-defined operator, whose semantics we know nothing about)?
+    let private isCoreOperator (compiledName : string) (mfv : FSharpMemberOrFunctionOrValue) =
+        mfv.CompiledName = compiledName
+        && (
+            match mfv.DeclaringEntity with
+            | Some entity -> entity.TryGetFullName () = Some "Microsoft.FSharp.Core.Operators"
+            | None -> false
+        )
+
+    /// Numbers the opaque leaves of condition formulas. Reads of the same immutable value share an
+    /// atom; everything else (including mutable reads, which may change between occurrences) gets a
+    /// fresh atom per occurrence.
+    type private AtomAllocator () =
+        let byValue =
+            System.Collections.Generic.Dictionary<FSharpMemberOrFunctionOrValue, int> ()
+
+        let mutable count = 0
+
+        member _.Count = count
+
+        member _.Fresh () =
+            let i = count
+            count <- count + 1
+            i
+
+        member this.OfValue (v : FSharpMemberOrFunctionOrValue) =
+            if v.IsMutable then
+                this.Fresh ()
+            else
+                match byValue.TryGetValue v with
+                | true, i -> i
+                | false, _ ->
+                    let i = this.Fresh ()
+                    byValue.[v] <- i
+                    i
+
+    let rec private toFormula (atoms : AtomAllocator) (expr : FSharpExpr) : BoolFormula =
+        match expr with
+        | Const (value, _) ->
+            match value with
+            | :? bool as b -> if b then BoolFormula.True else BoolFormula.False
+            | _ -> BoolFormula.Atom (atoms.Fresh ())
+        | Value v -> BoolFormula.Atom (atoms.OfValue v)
+        // && and || desugar to IfThenElse in the TAST, so this covers them too
+        | IfThenElse (cond, thenF, elseF) ->
+            BoolFormula.Branch (toFormula atoms cond, toFormula atoms thenF, toFormula atoms elseF)
+        | Call (None, mfv, _, _, [ arg ]) when isCoreOperator "Not" mfv -> BoolFormula.Not (toFormula atoms arg)
+        | _ -> BoolFormula.Atom (atoms.Fresh ())
+
+    let rec private toBitTree (atoms : AtomAllocator) (expr : FSharpExpr) : BitTree =
+        match expr with
+        | Const (value, _) ->
+            match value with
+            | null -> BitTree.Leaf FlagFacts.unknown
+            | value ->
+                (try
+                    if System.Convert.ToInt64 value &&& runContinuationsAsynchronouslyBit <> 0L then
+                        BitTree.Leaf FlagFacts.alwaysSet
+                    else
+                        BitTree.Leaf FlagFacts.neverSet
+                 with _ ->
+                     BitTree.Leaf FlagFacts.unknown)
+        | IfThenElse (cond, thenBranch, elseBranch) ->
+            BitTree.Cond (toFormula atoms cond, toBitTree atoms thenBranch, toBitTree atoms elseBranch)
+        | Call (None, mfv, _, _, [ lhs ; rhs ]) when isCoreOperator "op_BitwiseOr" mfv ->
+            BitTree.Op (BitOp.Or, toBitTree atoms lhs, toBitTree atoms rhs)
+        | Call (None, mfv, _, _, [ lhs ; rhs ]) when isCoreOperator "op_BitwiseAnd" mfv ->
+            BitTree.Op (BitOp.And, toBitTree atoms lhs, toBitTree atoms rhs)
+        | Call (None, mfv, _, _, [ lhs ; rhs ]) when isCoreOperator "op_ExclusiveOr" mfv ->
+            BitTree.Op (BitOp.Xor, toBitTree atoms lhs, toBitTree atoms rhs)
+        | _ -> BitTree.Leaf FlagFacts.unknown
 
     /// Conservatively evaluate what we know about the RunContinuationsAsynchronously bit of the
     /// value of this TaskCreationOptions expression. Anything we can't analyse (e.g. an opaque
     /// variable, which may well be correct) yields no information.
-    let rec flagFacts (expr : FSharpExpr) : FlagFacts =
-        match expr with
-        | Const (value, _) ->
-            match value with
-            | null -> FlagFacts.unknown
-            | value ->
-                (try
-                    if System.Convert.ToInt64 value &&& runContinuationsAsynchronouslyBit <> 0L then
-                        FlagFacts.alwaysSet
-                    else
-                        FlagFacts.neverSet
-                 with _ ->
-                     FlagFacts.unknown)
-        | IfThenElse (cond, thenBranch, elseBranch) ->
-            match cond with
-            // A constant condition means only one branch is reachable.
-            | Const ((:? bool as b), _) -> flagFacts (if b then thenBranch else elseBranch)
-            | _ -> FlagFacts.join (flagFacts thenBranch) (flagFacts elseBranch)
-        | Call (None, mfv, _, _, [ lhs ; rhs ]) ->
-            match mfv.CompiledName with
-            | "op_BitwiseOr" -> FlagFacts.bitwiseOr (flagFacts lhs) (flagFacts rhs)
-            | "op_BitwiseAnd" -> FlagFacts.bitwiseAnd (flagFacts lhs) (flagFacts rhs)
-            | "op_ExclusiveOr" -> FlagFacts.bitwiseXor (flagFacts lhs) (flagFacts rhs)
-            | _ -> FlagFacts.unknown
-        | _ -> FlagFacts.unknown
+    let flagFacts (expr : FSharpExpr) : FlagFacts =
+        let atoms = AtomAllocator ()
+        let tree = toBitTree atoms expr
+        BitTree.flagFacts atoms.Count tree
 
     let checkTaskCompletionSourceCall
         (violations : ResizeArray<range>)

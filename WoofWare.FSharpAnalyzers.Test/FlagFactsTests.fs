@@ -4,97 +4,120 @@ open NUnit.Framework
 open WoofWare.FSharpAnalyzers
 
 /// Soundness tests for the abstract domain used by TaskCompletionSourceAnalyzer to track the
-/// RunContinuationsAsynchronously bit. We exhaustively compare the transfer functions against a
-/// concrete reference evaluation over a small expression language.
+/// RunContinuationsAsynchronously bit. We exhaustively compare the analyzer's evaluation (BitTree
+/// over condition formulas, enumerated across atom valuations) against a concrete reference
+/// evaluation.
 [<TestFixture>]
 module FlagFactsTests =
 
-    /// An expression language over a single bit, mirroring the shapes that
-    /// TaskCompletionSourceAnalyzer.flagFacts can analyse. Every Cond node is an independent
-    /// two-way branch, matching the analyzer's assumption that both branches of a (non-constant)
-    /// conditional are reachable.
-    type BitExpr =
-        | Lit of bool
-        | Opaque of int
-        | Cond of BitExpr * BitExpr
-        | Or of BitExpr * BitExpr
-        | And of BitExpr * BitExpr
-        | Xor of BitExpr * BitExpr
+    /// An expression language over a single bit, mirroring TaskCompletionSourceAnalyzer.BitTree
+    /// but retaining the identity of opaque leaves so we can evaluate concretely. Conditions are
+    /// boolean formulas over two atoms shared across the whole expression, so tautological or
+    /// contradictory conditions and correlated nested conditionals are all representable.
+    type TestExpr =
+        | TLit of bool
+        | TOpaque of int
+        | TCond of TaskCompletionSourceAnalyzer.BoolFormula * TestExpr * TestExpr
+        | TOp of TaskCompletionSourceAnalyzer.BitOp * TestExpr * TestExpr
 
-    let rec abstractEval (e : BitExpr) : TaskCompletionSourceAnalyzer.FlagFacts =
+    let rec toBitTree (e : TestExpr) : TaskCompletionSourceAnalyzer.BitTree =
         match e with
-        | Lit true -> TaskCompletionSourceAnalyzer.FlagFacts.alwaysSet
-        | Lit false -> TaskCompletionSourceAnalyzer.FlagFacts.neverSet
-        | Opaque _ -> TaskCompletionSourceAnalyzer.FlagFacts.unknown
-        | Cond (t, f) -> TaskCompletionSourceAnalyzer.FlagFacts.join (abstractEval t) (abstractEval f)
-        | Or (a, b) -> TaskCompletionSourceAnalyzer.FlagFacts.bitwiseOr (abstractEval a) (abstractEval b)
-        | And (a, b) -> TaskCompletionSourceAnalyzer.FlagFacts.bitwiseAnd (abstractEval a) (abstractEval b)
-        | Xor (a, b) -> TaskCompletionSourceAnalyzer.FlagFacts.bitwiseXor (abstractEval a) (abstractEval b)
+        | TLit true -> TaskCompletionSourceAnalyzer.BitTree.Leaf TaskCompletionSourceAnalyzer.FlagFacts.alwaysSet
+        | TLit false -> TaskCompletionSourceAnalyzer.BitTree.Leaf TaskCompletionSourceAnalyzer.FlagFacts.neverSet
+        | TOpaque _ -> TaskCompletionSourceAnalyzer.BitTree.Leaf TaskCompletionSourceAnalyzer.FlagFacts.unknown
+        | TCond (c, t, f) -> TaskCompletionSourceAnalyzer.BitTree.Cond (c, toBitTree t, toBitTree f)
+        | TOp (op, a, b) -> TaskCompletionSourceAnalyzer.BitTree.Op (op, toBitTree a, toBitTree b)
 
-    let rec countConds (e : BitExpr) : int =
+    /// Evaluate concretely. `condAtoms` is a valuation of the condition atoms (shared across every
+    /// condition in the expression); `opaques` assigns a bit to each opaque leaf.
+    let rec concreteEval (condAtoms : bool[]) (opaques : bool[]) (e : TestExpr) : bool =
         match e with
-        | Lit _
-        | Opaque _ -> 0
-        | Cond (a, b) -> 1 + countConds a + countConds b
-        | Or (a, b)
-        | And (a, b)
-        | Xor (a, b) -> countConds a + countConds b
+        | TLit b -> b
+        | TOpaque i -> opaques.[i]
+        | TCond (c, t, f) ->
+            if TaskCompletionSourceAnalyzer.BoolFormula.eval (fun i -> condAtoms.[i]) c then
+                concreteEval condAtoms opaques t
+            else
+                concreteEval condAtoms opaques f
+        | TOp (op, a, b) ->
+            let a = concreteEval condAtoms opaques a
+            let b = concreteEval condAtoms opaques b
 
-    /// Evaluate concretely. `conds` assigns a branch direction to each Cond node (numbered in
-    /// depth-first order); `opaques` assigns a bit to each opaque atom. Opaque atoms with the same
-    /// index share a value, so correlated operands are exercised.
-    let concreteEval (conds : bool[]) (opaques : bool[]) (e : BitExpr) : bool =
-        let rec go (offset : int) (e : BitExpr) : bool =
-            match e with
-            | Lit b -> b
-            | Opaque i -> opaques.[i]
-            | Cond (t, f) ->
-                if conds.[offset] then
-                    go (offset + 1) t
-                else
-                    go (offset + 1 + countConds t) f
-            | Or (a, b) -> go offset a || go (offset + countConds a) b
-            | And (a, b) -> go offset a && go (offset + countConds a) b
-            | Xor (a, b) -> go offset a <> go (offset + countConds a) b
+            match op with
+            | TaskCompletionSourceAnalyzer.BitOp.Or -> a || b
+            | TaskCompletionSourceAnalyzer.BitOp.And -> a && b
+            | TaskCompletionSourceAnalyzer.BitOp.Xor -> a <> b
 
-        go 0 e
+    /// Condition formulas over two atoms, including a tautology and a contradiction built from
+    /// correlated occurrences of the same atom.
+    let formulas =
+        let atom0 = TaskCompletionSourceAnalyzer.BoolFormula.Atom 0
+        let atom1 = TaskCompletionSourceAnalyzer.BoolFormula.Atom 1
 
-    let atoms = [ Lit true ; Lit false ; Opaque 0 ; Opaque 1 ]
+        [
+            TaskCompletionSourceAnalyzer.BoolFormula.True
+            TaskCompletionSourceAnalyzer.BoolFormula.False
+            atom0
+            atom1
+            TaskCompletionSourceAnalyzer.BoolFormula.Not atom0
+            // b || not b
+            TaskCompletionSourceAnalyzer.BoolFormula.Branch (
+                atom0,
+                TaskCompletionSourceAnalyzer.BoolFormula.True,
+                TaskCompletionSourceAnalyzer.BoolFormula.Not atom0
+            )
+            // b && not b
+            TaskCompletionSourceAnalyzer.BoolFormula.Branch (
+                atom0,
+                TaskCompletionSourceAnalyzer.BoolFormula.Not atom0,
+                TaskCompletionSourceAnalyzer.BoolFormula.False
+            )
+            // a || b
+            TaskCompletionSourceAnalyzer.BoolFormula.Branch (
+                atom0,
+                TaskCompletionSourceAnalyzer.BoolFormula.True,
+                atom1
+            )
+        ]
+
+    let atoms = [ TLit true ; TLit false ; TOpaque 0 ; TOpaque 1 ]
 
     /// All expressions whose immediate children are drawn from `smaller`.
-    let grow (smaller : BitExpr list) : BitExpr list =
+    let grow (smaller : TestExpr list) : TestExpr list =
         [
             yield! atoms
 
             for a in smaller do
                 for b in smaller do
-                    yield Cond (a, b)
-                    yield Or (a, b)
-                    yield And (a, b)
-                    yield Xor (a, b)
+                    for c in formulas do
+                        yield TCond (c, a, b)
+
+                    yield TOp (TaskCompletionSourceAnalyzer.BitOp.Or, a, b)
+                    yield TOp (TaskCompletionSourceAnalyzer.BitOp.And, a, b)
+                    yield TOp (TaskCompletionSourceAnalyzer.BitOp.Xor, a, b)
         ]
 
     let allBools (n : int) : bool[] seq =
         Seq.init (1 <<< n) (fun mask -> Array.init n (fun i -> ((mask >>> i) &&& 1) = 1))
 
-    /// For every expression of depth at most 2, every claim the abstract domain makes must hold of
-    /// the concrete evaluation, for every valuation of the opaque atoms:
-    ///   SomePathLacks = Some false  =>  the bit is 1 under every branch assignment
-    ///   SomePathLacks = Some true   =>  some branch assignment gives bit 0
-    ///   SomePathHas   = Some false  =>  the bit is 0 under every branch assignment
-    ///   SomePathHas   = Some true   =>  some branch assignment gives bit 1
+    /// For every expression of depth at most 2, every claim the analyzer's evaluation makes must
+    /// hold of the concrete evaluation, for every valuation of the opaque leaves. The path space is
+    /// the set of condition-atom valuations:
+    ///   SomePathLacks = Some false  =>  the bit is 1 under every atom valuation
+    ///   SomePathLacks = Some true   =>  some atom valuation gives bit 0
+    ///   SomePathHas   = Some false  =>  the bit is 0 under every atom valuation
+    ///   SomePathHas   = Some true   =>  some atom valuation gives bit 1
     [<Test>]
-    let ``flagFacts transfer functions are sound`` () =
+    let ``BitTree evaluation is sound`` () =
         let expressions = grow (grow atoms)
 
         for e in expressions do
-            let facts = abstractEval e
-            let nConds = countConds e
+            let facts = TaskCompletionSourceAnalyzer.BitTree.flagFacts 2 (toBitTree e)
 
             for opaques in allBools 2 do
                 let results =
-                    allBools nConds
-                    |> Seq.map (fun conds -> concreteEval conds opaques e)
+                    allBools 2
+                    |> Seq.map (fun condAtoms -> concreteEval condAtoms opaques e)
                     |> Seq.toList
 
                 match facts.SomePathLacks with
