@@ -36,44 +36,26 @@ module ThrowingInDisposeAnalyzer =
                     && abs.DeclaringType.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
                 )
 
-            // Also check if the declaring entity implements IDisposable (for implicit implementations)
-            let declaringEntityImplementsIDisposable =
-                match mfv.DeclaringEntity with
-                | Some entity ->
-                    entity.AllInterfaces
-                    |> Seq.exists (fun iface ->
-                        iface.HasTypeDefinition
-                        && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
-                    )
-                | None -> false
-
-            // Check if it's a Dispose(bool) helper method (common dispose pattern)
+            // Check if it's a Dispose(bool) helper method (common dispose pattern).
+            //
+            // We deliberately do NOT treat every `Dispose` overload on an IDisposable type as
+            // lifecycle disposal: an unrelated overload such as `Dispose(reason : string)` has
+            // nothing to do with disposal, so we key off the disposal-shaped signatures only. The
+            // genuine `IDisposable.Dispose()` is caught by `implementsIDisposableDispose` above; the
+            // `Dispose(bool)` protected helper of the classic dispose pattern is caught here.
+            //
+            // Note the parameter type is the F# abbreviation `bool`, so we must strip abbreviations
+            // before comparing against the underlying `System.Boolean`.
             let isDisposeBool =
                 if mfv.CurriedParameterGroups.Count = 1 && mfv.CurriedParameterGroups.[0].Count = 1 then
-                    let param = mfv.CurriedParameterGroups.[0].[0]
+                    let paramType = mfv.CurriedParameterGroups.[0].[0].Type.StripAbbreviations ()
 
-                    param.Type.HasTypeDefinition
-                    && param.Type.TypeDefinition.TryGetFullName () = Some "System.Boolean"
+                    paramType.HasTypeDefinition
+                    && paramType.TypeDefinition.TryGetFullName () = Some "System.Boolean"
                 else
                     false
 
-            // Temporarily: also allow if has no parameters and is part of a type that implements IDisposable
-            // This catches explicit interface implementations that might not be detected above
-            let isParameterlessDisposeInIDisposableType =
-                mfv.CurriedParameterGroups.Count = 0
-                && match mfv.DeclaringEntity with
-                   | Some entity ->
-                       entity.AllInterfaces
-                       |> Seq.exists (fun iface ->
-                           iface.HasTypeDefinition
-                           && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
-                       )
-                   | None -> false
-
-            implementsIDisposableDispose
-            || declaringEntityImplementsIDisposable
-            || isDisposeBool
-            || isParameterlessDisposeInIDisposableType
+            implementsIDisposableDispose || isDisposeBool
         else
             false
 
