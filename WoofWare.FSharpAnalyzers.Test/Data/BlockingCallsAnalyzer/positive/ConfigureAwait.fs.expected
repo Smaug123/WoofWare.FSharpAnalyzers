@@ -1,0 +1,4 @@
+WOOF-BLOCKING | Warning | (7,4--7,53) | Synchronous blocking call 'ConfiguredTaskAwaiter.GetResult' should be avoided. This can cause deadlocks and thread pool starvation. Consider using `let!` in a `task` or `async` computation expression.
+WOOF-BLOCKING | Warning | (11,4--11,53) | Synchronous blocking call 'ConfiguredTaskAwaiter.GetResult' should be avoided. This can cause deadlocks and thread pool starvation. Consider using `let!` in a `task` or `async` computation expression.
+WOOF-BLOCKING | Warning | (15,4--15,54) | Synchronous blocking call 'ConfiguredValueTaskAwaiter.GetResult' should be avoided. This can cause deadlocks and thread pool starvation. Consider using `let!` in a `task` or `async` computation expression.
+WOOF-BLOCKING | Warning | (19,4--19,54) | Synchronous blocking call 'ConfiguredValueTaskAwaiter.GetResult' should be avoided. This can cause deadlocks and thread pool starvation. Consider using `let!` in a `task` or `async` computation expression.
