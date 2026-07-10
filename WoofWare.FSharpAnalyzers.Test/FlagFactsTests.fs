@@ -4,9 +4,9 @@ open NUnit.Framework
 open WoofWare.FSharpAnalyzers
 
 /// Soundness tests for the abstract domain used by TaskCompletionSourceAnalyzer to track the
-/// RunContinuationsAsynchronously bit. We exhaustively compare the analyzer's evaluation (BitTree
-/// over condition formulas, with atoms split into free and opaque and constrained by path
-/// conditions) against a concrete reference evaluation.
+/// RunContinuationsAsynchronously bit. We compare the analyzer's evaluation (BitTree over condition
+/// formulas, with atoms split into free and opaque and constrained by path conditions) against a
+/// concrete reference evaluation, over a random sample of expressions.
 [<TestFixture>]
 module FlagFactsTests =
 
@@ -17,7 +17,7 @@ module FlagFactsTests =
     type TestExpr =
         | TLit of bool
         | TOpaque of int
-        | TCond of TaskCompletionSourceAnalyzer.BoolFormula * TestExpr * TestExpr
+        | TCond of BoolFormula * TestExpr * TestExpr
         | TOp of TaskCompletionSourceAnalyzer.BitOp * TestExpr * TestExpr
 
     let rec toBitTree (e : TestExpr) : TaskCompletionSourceAnalyzer.BitTree =
@@ -35,7 +35,7 @@ module FlagFactsTests =
         | TLit b -> b
         | TOpaque i -> opaques.[i]
         | TCond (c, t, f) ->
-            if TaskCompletionSourceAnalyzer.BoolFormula.eval (fun i -> condAtoms.[i]) c then
+            if BoolFormula.eval (fun i -> condAtoms.[i]) c then
                 concreteEval condAtoms opaques t
             else
                 concreteEval condAtoms opaques f
@@ -51,33 +51,21 @@ module FlagFactsTests =
     /// Condition formulas over two atoms, including a tautology and a contradiction built from
     /// correlated occurrences of the same atom.
     let formulas =
-        let atom0 = TaskCompletionSourceAnalyzer.BoolFormula.Atom 0
-        let atom1 = TaskCompletionSourceAnalyzer.BoolFormula.Atom 1
+        let atom0 = BoolFormula.Atom 0
+        let atom1 = BoolFormula.Atom 1
 
         [
-            TaskCompletionSourceAnalyzer.BoolFormula.True
-            TaskCompletionSourceAnalyzer.BoolFormula.False
+            BoolFormula.True
+            BoolFormula.False
             atom0
             atom1
-            TaskCompletionSourceAnalyzer.BoolFormula.Not atom0
+            BoolFormula.Not atom0
             // b || not b
-            TaskCompletionSourceAnalyzer.BoolFormula.Branch (
-                atom0,
-                TaskCompletionSourceAnalyzer.BoolFormula.True,
-                TaskCompletionSourceAnalyzer.BoolFormula.Not atom0
-            )
+            BoolFormula.Branch (atom0, BoolFormula.True, BoolFormula.Not atom0)
             // b && not b
-            TaskCompletionSourceAnalyzer.BoolFormula.Branch (
-                atom0,
-                TaskCompletionSourceAnalyzer.BoolFormula.Not atom0,
-                TaskCompletionSourceAnalyzer.BoolFormula.False
-            )
+            BoolFormula.Branch (atom0, BoolFormula.Not atom0, BoolFormula.False)
             // a || b
-            TaskCompletionSourceAnalyzer.BoolFormula.Branch (
-                atom0,
-                TaskCompletionSourceAnalyzer.BoolFormula.True,
-                atom1
-            )
+            BoolFormula.Branch (atom0, BoolFormula.True, atom1)
         ]
 
     let atoms = [| TLit true ; TLit false ; TOpaque 0 ; TOpaque 1 |]
@@ -120,9 +108,9 @@ module FlagFactsTests =
     /// couplings where an *opaque* atom gates a *free* one — the shape that exposes quantifier-order
     /// mistakes between free and opaque atoms (feasibility of a free assignment under one hypothetical
     /// opaque value must not make it count as reachable).
-    let pathCondCandidates : (TaskCompletionSourceAnalyzer.BoolFormula * bool) list list =
-        let atom0 = TaskCompletionSourceAnalyzer.BoolFormula.Atom 0
-        let atom1 = TaskCompletionSourceAnalyzer.BoolFormula.Atom 1
+    let pathCondCandidates : (BoolFormula * bool) list list =
+        let atom0 = BoolFormula.Atom 0
+        let atom1 = BoolFormula.Atom 1
 
         [
             []
@@ -131,22 +119,8 @@ module FlagFactsTests =
             [ atom1, true ]
             [ atom1, false ]
             // atom0 || not atom1, and its mirror
-            [
-                TaskCompletionSourceAnalyzer.BoolFormula.Branch (
-                    atom0,
-                    TaskCompletionSourceAnalyzer.BoolFormula.True,
-                    TaskCompletionSourceAnalyzer.BoolFormula.Not atom1
-                ),
-                true
-            ]
-            [
-                TaskCompletionSourceAnalyzer.BoolFormula.Branch (
-                    atom1,
-                    TaskCompletionSourceAnalyzer.BoolFormula.True,
-                    TaskCompletionSourceAnalyzer.BoolFormula.Not atom0
-                ),
-                true
-            ]
+            [ BoolFormula.Branch (atom0, BoolFormula.True, BoolFormula.Not atom1), true ]
+            [ BoolFormula.Branch (atom1, BoolFormula.True, BoolFormula.Not atom0), true ]
         ]
 
     /// Soundness of `flagFactsUnder`. Free atoms range over both values (each a reachable class of
@@ -157,10 +131,10 @@ module FlagFactsTests =
     /// the opaque condition atoms and opaque bit leaves, let `results` be the concrete bit over the
     /// feasible free assignments. Then, in every opaque world in which the site is *reachable* (a
     /// non-empty `results`):
-    ///   SomePathLacks = Some false  =>  the bit is 1 on every feasible path
-    ///   SomePathLacks = Some true   =>  not every feasible path has the bit
-    ///   SomePathHas   = Some false  =>  the bit is 0 on every feasible path
-    ///   SomePathHas   = Some true   =>  some feasible path has the bit
+    ///   SomePathLacks = No   =>  the bit is 1 on every feasible path
+    ///   SomePathLacks = Yes  =>  not every feasible path has the bit
+    ///   SomePathHas   = No   =>  the bit is 0 on every feasible path
+    ///   SomePathHas   = Yes  =>  some feasible path has the bit
     ///
     /// An empty `results` (the site is dead in that opaque world) constrains nothing: we deliberately
     /// drop irrelevant path conditions rather than use them to prove unreachability, so a definite
@@ -184,9 +158,7 @@ module FlagFactsTests =
 
                     let pathHolds (condAtoms : bool[]) =
                         conds
-                        |> List.forall (fun (f, b) ->
-                            TaskCompletionSourceAnalyzer.BoolFormula.eval (fun i -> condAtoms.[i]) f = b
-                        )
+                        |> List.forall (fun (f, b) -> BoolFormula.eval (fun i -> condAtoms.[i]) f = b)
 
                     // For every fixed valuation of the opaque condition atoms and opaque bit leaves...
                     for opaqueCondAtoms in allBools 2 do
@@ -203,23 +175,23 @@ module FlagFactsTests =
                                 |> Seq.toList
 
                             match facts.SomePathLacks with
-                            | Some false ->
+                            | Ternary.No ->
                                 if not (List.forall id results) then
                                     failwith
                                         $"claimed bit always set, but found a feasible path without it: %A{e}, free %A{freeSet}, conds %A{conds}, opaqueCondAtoms %A{opaqueCondAtoms}, opaques %A{opaques}"
-                            | Some true ->
+                            | Ternary.Yes ->
                                 if not (List.isEmpty results) && List.forall id results then
                                     failwith
                                         $"claimed a provably bit-less path, but bit set on every feasible path in this opaque world: %A{e}, free %A{freeSet}, conds %A{conds}, opaqueCondAtoms %A{opaqueCondAtoms}, opaques %A{opaques}"
-                            | None -> ()
+                            | Ternary.Unknown -> ()
 
                             match facts.SomePathHas with
-                            | Some false ->
+                            | Ternary.No ->
                                 if List.exists id results then
                                     failwith
                                         $"claimed bit never set, but found a feasible path with it: %A{e}, free %A{freeSet}, conds %A{conds}, opaqueCondAtoms %A{opaqueCondAtoms}, opaques %A{opaques}"
-                            | Some true ->
+                            | Ternary.Yes ->
                                 if not (List.isEmpty results) && not (List.exists id results) then
                                     failwith
                                         $"claimed a provably bit-ful path, but bit clear on every feasible path in this opaque world: %A{e}, free %A{freeSet}, conds %A{conds}, opaqueCondAtoms %A{opaqueCondAtoms}, opaques %A{opaques}"
-                            | None -> ()
+                            | Ternary.Unknown -> ()

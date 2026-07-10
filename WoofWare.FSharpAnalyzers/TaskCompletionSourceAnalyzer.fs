@@ -23,44 +23,42 @@ module TaskCompletionSourceAnalyzer =
         | Some "System.Threading.Tasks.TaskCreationOptions" -> Some e
         | _ -> None
 
-    /// Conservative knowledge about one bit of an expression's value, quantified over the
-    /// control-flow paths within the expression. Each field is an existential fact in three-valued
-    /// logic; the two together let us distinguish "the bit is 0 on every path" from "the bit is
-    /// provably 0 on at least one path" from "no idea".
+    /// What we know about the RunContinuationsAsynchronously bit across all paths through an options
+    /// expression. The two facts are tracked independently so we can record partial knowledge — e.g.
+    /// "some path sets the bit, but whether any path leaves it clear is unknown" — that a single
+    /// always/never/both summary could not express.
     type FlagFacts =
         {
-            /// Some true: there is provably a path on which the bit is 0.
-            /// Some false: the bit is provably 1 on every path. None: no information.
-            SomePathLacks : bool option
-            /// Some true: there is provably a path on which the bit is 1.
-            /// Some false: the bit is provably 0 on every path. None: no information.
-            SomePathHas : bool option
+            /// Is there a path that leaves the bit clear?
+            SomePathLacks : Ternary
+            /// Is there a path that sets the bit?
+            SomePathHas : Ternary
         }
 
     [<RequireQualifiedAccess>]
     module FlagFacts =
         let unknown =
             {
-                SomePathLacks = None
-                SomePathHas = None
+                SomePathLacks = Ternary.Unknown
+                SomePathHas = Ternary.Unknown
             }
 
         /// The bit is 1 on every path.
         let alwaysSet =
             {
-                SomePathLacks = Some false
-                SomePathHas = Some true
+                SomePathLacks = Ternary.No
+                SomePathHas = Ternary.Yes
             }
 
         /// The bit is 0 on every path.
         let neverSet =
             {
-                SomePathLacks = Some true
-                SomePathHas = Some false
+                SomePathLacks = Ternary.Yes
+                SomePathHas = Ternary.No
             }
 
-        let isAlwaysSet (f : FlagFacts) = f.SomePathLacks = Some false
-        let isNeverSet (f : FlagFacts) = f.SomePathHas = Some false
+        let isAlwaysSet (f : FlagFacts) = f.SomePathLacks = Ternary.No
+        let isNeverSet (f : FlagFacts) = f.SomePathHas = Ternary.No
 
         /// The bit on every path is the negation of the input's bit (i.e. XOR with a constant 1).
         let flip (f : FlagFacts) =
@@ -69,25 +67,28 @@ module TaskCompletionSourceAnalyzer =
                 SomePathHas = f.SomePathLacks
             }
 
-        /// Combine facts over two reachable classes of paths: the result describes the union of the
-        /// two sets of paths.
+        /// Facts over the union of two reachable classes of paths: each existential holds if it holds
+        /// on either side.
         let join (a : FlagFacts) (b : FlagFacts) =
-            let combine x y =
-                match x, y with
-                | Some true, _
-                | _, Some true -> Some true
-                | Some false, Some false -> Some false
-                | _, _ -> None
-
             {
-                SomePathLacks = combine a.SomePathLacks b.SomePathLacks
-                SomePathHas = combine a.SomePathHas b.SomePathHas
+                SomePathLacks = Ternary.or_ a.SomePathLacks b.SomePathLacks
+                SomePathHas = Ternary.or_ a.SomePathHas b.SomePathHas
             }
 
-        /// An existential fact survives disjunction of operands only when it holds regardless of the
-        /// other operand; the operands' paths may be correlated, so we can't combine two existentials.
-        let existsEither x y =
-            if x = Some true || y = Some true then Some true else None
+        /// Facts that hold whichever of two possibilities is the case: keep only what both agree on.
+        let meet (a : FlagFacts) (b : FlagFacts) =
+            {
+                SomePathLacks = Ternary.agree a.SomePathLacks b.SomePathLacks
+                SomePathHas = Ternary.agree a.SomePathHas b.SomePathHas
+            }
+
+        /// `Yes` if either operand is `Yes`, else `Unknown`. Unlike a disjunction it never returns
+        /// `No`: the operands' paths may be correlated, so two "some path" facts can't be combined.
+        let private eitherYes (a : Ternary) (b : Ternary) =
+            if a = Ternary.Yes || b = Ternary.Yes then
+                Ternary.Yes
+            else
+                Ternary.Unknown
 
         let bitwiseOr (a : FlagFacts) (b : FlagFacts) =
             if isAlwaysSet a || isAlwaysSet b then
@@ -98,9 +99,9 @@ module TaskCompletionSourceAnalyzer =
                 a
             else
                 {
-                    SomePathLacks = None
+                    SomePathLacks = Ternary.Unknown
                     // a path on which either operand's bit is 1 gives the result bit 1 there
-                    SomePathHas = existsEither a.SomePathHas b.SomePathHas
+                    SomePathHas = eitherYes a.SomePathHas b.SomePathHas
                 }
 
         let bitwiseAnd (a : FlagFacts) (b : FlagFacts) =
@@ -113,8 +114,8 @@ module TaskCompletionSourceAnalyzer =
             else
                 {
                     // a path on which either operand's bit is 0 gives the result bit 0 there
-                    SomePathLacks = existsEither a.SomePathLacks b.SomePathLacks
-                    SomePathHas = None
+                    SomePathLacks = eitherYes a.SomePathLacks b.SomePathLacks
+                    SomePathHas = Ternary.Unknown
                 }
 
         let bitwiseXor (a : FlagFacts) (b : FlagFacts) =
@@ -129,64 +130,6 @@ module TaskCompletionSourceAnalyzer =
             else
                 // both operands vary across paths, and their paths may be correlated
                 unknown
-
-    /// The boolean structure of a conditional's guard. Atoms are subexpressions we can't analyse;
-    /// two atom occurrences share an index exactly when they are reads of the same immutable value,
-    /// so a valuation of the atoms determines the formula's value.
-    type BoolFormula =
-        | True
-        | False
-        | Atom of int
-        | Not of BoolFormula
-        | Branch of BoolFormula * BoolFormula * BoolFormula
-
-    [<RequireQualifiedAccess>]
-    module BoolFormula =
-        // `toFormula` memoizes substituted `let` bindings, so a formula may be a DAG (an alias read
-        // twice shares one node). We must traverse it by node identity, or a chain like
-        // `bN = bPrev && bPrev` — linear to build — takes 2^N to walk. The per-call reference-keyed
-        // cache makes every traversal linear in the number of distinct nodes.
-        let eval (valuation : int -> bool) (f : BoolFormula) : bool =
-            let cache =
-                System.Collections.Generic.Dictionary<BoolFormula, bool> (HashIdentity.Reference)
-
-            let rec go f =
-                match cache.TryGetValue f with
-                | true, v -> v
-                | false, _ ->
-                    let v =
-                        match f with
-                        | True -> true
-                        | False -> false
-                        | Atom i -> valuation i
-                        | Not g -> not (go g)
-                        | Branch (cond, thenF, elseF) -> if go cond then go thenF else go elseF
-
-                    cache.[f] <- v
-                    v
-
-            go f
-
-        let atoms (f : BoolFormula) : Set<int> =
-            let cache =
-                System.Collections.Generic.Dictionary<BoolFormula, Set<int>> (HashIdentity.Reference)
-
-            let rec go f =
-                match cache.TryGetValue f with
-                | true, s -> s
-                | false, _ ->
-                    let s =
-                        match f with
-                        | True
-                        | False -> Set.empty
-                        | Atom i -> Set.singleton i
-                        | Not g -> go g
-                        | Branch (a, b, c) -> Set.unionMany [ go a ; go b ; go c ]
-
-                    cache.[f] <- s
-                    s
-
-            go f
 
     [<RequireQualifiedAccess>]
     type BitOp =
@@ -301,8 +244,8 @@ module TaskCompletionSourceAnalyzer =
                 // The vacuous element (no paths): identity for `join`, poison for `meet`.
                 let noPaths =
                     {
-                        SomePathLacks = Some false
-                        SomePathHas = Some false
+                        SomePathLacks = Ternary.No
+                        SomePathHas = Ternary.No
                     }
 
                 // For a fixed opaque valuation, join facts over the free assignments feasible under it.
@@ -318,15 +261,8 @@ module TaskCompletionSourceAnalyzer =
                         | [] -> noPaths
                         | fs -> List.reduce FlagFacts.join fs
 
-                let meet (a : FlagFacts) (b : FlagFacts) =
-                    let combine x y = if x = y then x else None
-
-                    {
-                        SomePathLacks = combine a.SomePathLacks b.SomePathLacks
-                        SomePathHas = combine a.SomePathHas b.SomePathHas
-                    }
-
-                let result = Seq.init (1 <<< opaqueAtoms.Length) factsForOpaque |> Seq.reduce meet
+                let result =
+                    Seq.init (1 <<< opaqueAtoms.Length) factsForOpaque |> Seq.reduce FlagFacts.meet
 
                 // Every opaque world unreachable: the site is dead, so we can prove nothing.
                 if result = noPaths then FlagFacts.unknown else result
@@ -558,7 +494,7 @@ module TaskCompletionSourceAnalyzer =
                     | opts ->
                         opts
                         |> List.exists (fun opt ->
-                            (flagFacts env constrainedVars pathConds opt).SomePathLacks = Some true
+                            (flagFacts env constrainedVars pathConds opt).SomePathLacks = Ternary.Yes
                         )
 
                 if hasViolation then
