@@ -296,7 +296,15 @@ module ThrowingInDisposeAnalyzer =
             ))
 
     /// Recursively walk an expression, collecting the Dispose bodies of object expressions
-    /// implementing IDisposable
+    /// implementing IDisposable.
+    ///
+    /// Known limitation: only the IDisposable bodies are collected. Anonymous members of
+    /// *other* interfaces on the same object expression are not resolution targets for the
+    /// delegation trace, so an object expression whose IDisposable.Dispose delegates to its
+    /// own ICleanup.Dispose (which then calls a named helper) drops the trace at that hop.
+    /// Supporting it would need a parallel declaration universe for anonymous members;
+    /// cross-interface self-delegation inside one object expression is rare enough that
+    /// this is not worth the complexity.
     let rec private findAnonymousDisposeBodies (expr : FSharpExpr) (acc : ResizeArray<FSharpExpr>) =
         match expr with
         | FSharp.Compiler.Symbols.FSharpExprPatterns.ObjectExpr (typ, _, overrides, interfaceImpls) ->
@@ -426,22 +434,42 @@ module ThrowingInDisposeAnalyzer =
                 // disposal path shadows just like any other base implementation. The
                 // receiver's static type bounds the possibilities: the executing body is
                 // the most-derived override at or above the receiver's *dynamic* type,
-                // which is the receiver's static type or a subtype of it.
-                let receiverEntity =
-                    receiverType
-                    |> Option.map (fun typ -> typ.StripAbbreviations ())
-                    |> Option.bind (fun typ ->
-                        if typ.HasTypeDefinition then
-                            Some typ.TypeDefinition
-                        else
-                            None
-                    )
+                // which is the receiver's static type or a subtype of it. A receiver typed
+                // by a generic parameter is bounded by the parameter's coercion constraints
+                // instead ('T when 'T :> ICleanup can only ever be an ICleanup).
+                let boundingReceivers =
+                    match receiverType with
+                    | None -> []
+                    | Some typ ->
+                        let typ = typ.StripAbbreviations ()
 
-                match receiverEntity with
-                | None ->
+                        if typ.IsGenericParameter then
+                            typ.GenericParameter.Constraints
+                            |> Seq.choose (fun constr ->
+                                if constr.IsCoercesToConstraint then
+                                    let target = constr.CoercesToTarget.StripAbbreviations ()
+
+                                    if target.HasTypeDefinition then
+                                        Some target.TypeDefinition
+                                    else
+                                        None
+                                else
+                                    None
+                            )
+                            |> List.ofSeq
+                        elif typ.HasTypeDefinition then
+                            [ typ.TypeDefinition ]
+                        else
+                            []
+
+                match boundingReceivers with
+                | [] ->
                     // Without a receiver we cannot bound dispatch; resolve statically.
                     ownKeyMatches |> List.map fst
-                | Some receiverEntity ->
+                | receiverEntities ->
+
+                receiverEntities
+                |> List.collect (fun receiverEntity ->
                     let receiverChain = selfAndAncestorNames receiverEntity
 
                     let candidates =
@@ -493,6 +521,8 @@ module ThrowingInDisposeAnalyzer =
                         |> List.map fst
 
                     mostDerivedAncestorSide @ descendantSide
+                )
+                |> List.distinct
 
             // A finalizer participates in disposal (`override this.Finalize () =
             // this.Dispose false` is the classic pattern), so it seeds the trace alongside
