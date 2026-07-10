@@ -366,9 +366,26 @@ module TaskCompletionSourceAnalyzer =
             System.Collections.Generic.Dictionary<FSharpMemberOrFunctionOrValue, BoolFormula> ()
 
         let freeAtoms = System.Collections.Generic.HashSet<int> ()
+
+        // The immutable values that back free atoms, and the values read inside opaque guards. If
+        // these overlap, an opaque guard is a function of a free variable (e.g. `id b`); our model
+        // treats the two as independent and would admit impossible combinations, so we bail to unknown.
+        let freeVars =
+            System.Collections.Generic.HashSet<FSharpMemberOrFunctionOrValue> (HashIdentity.Structural)
+
+        let opaqueVars =
+            System.Collections.Generic.HashSet<FSharpMemberOrFunctionOrValue> (HashIdentity.Structural)
+
         let mutable count = 0
 
         member _.IsFree (i : int) = freeAtoms.Contains i
+
+        member _.OpaqueDependsOnFree = opaqueVars.Overlaps freeVars
+
+        /// Record that an opaque guard reads these values, so a dependence on a free variable is caught.
+        member _.NoteOpaqueReads (vars : FSharpMemberOrFunctionOrValue seq) =
+            for v in vars do
+                opaqueVars.Add v |> ignore
 
         /// A fresh opaque atom.
         member _.FreshOpaque () =
@@ -386,6 +403,8 @@ module TaskCompletionSourceAnalyzer =
             if v.IsMutable then
                 this.FreshOpaque ()
             else
+                freeVars.Add v |> ignore
+
                 match byValue.TryGetValue v with
                 | true, i -> i
                 | false, _ ->
@@ -418,6 +437,12 @@ module TaskCompletionSourceAnalyzer =
     let private envRemove (v : FSharpMemberOrFunctionOrValue) (env : Env) : Env =
         env |> List.filter (fun (k, _) -> not (k.Equals v))
 
+    /// Every value read anywhere inside an expression.
+    let rec private valueReads (expr : FSharpExpr) : FSharpMemberOrFunctionOrValue list =
+        match expr with
+        | Value v -> [ v ]
+        | _ -> expr.ImmediateSubExpressions |> List.collect valueReads
+
     let rec private toFormula (env : Env) (atoms : AtomAllocator) (expr : FSharpExpr) : BoolFormula =
         match expr with
         | Const (value, _) ->
@@ -433,7 +458,11 @@ module TaskCompletionSourceAnalyzer =
         | IfThenElse (cond, thenF, elseF) ->
             BoolFormula.Branch (toFormula env atoms cond, toFormula env atoms thenF, toFormula env atoms elseF)
         | Call (None, mfv, _, _, [ arg ]) when isCoreOperator "Not" mfv -> BoolFormula.Not (toFormula env atoms arg)
-        | _ -> BoolFormula.Atom (atoms.FreshOpaque ())
+        | _ ->
+            // An opaque guard: record the values it reads so a dependence on a free variable (which our
+            // independent-atom model would mishandle) can be detected.
+            atoms.NoteOpaqueReads (valueReads expr)
+            BoolFormula.Atom (atoms.FreshOpaque ())
 
     let rec private toBitTree (env : Env) (atoms : AtomAllocator) (expr : FSharpExpr) : BitTree =
         match expr with
@@ -475,7 +504,13 @@ module TaskCompletionSourceAnalyzer =
         let atoms = AtomAllocator ()
         let condFormulas = pathConds |> List.map (fun (e, b) -> toFormula env atoms e, b)
         let tree = toBitTree env atoms expr
-        BitTree.flagFactsUnder atoms.IsFree condFormulas tree
+
+        if atoms.OpaqueDependsOnFree then
+            // An opaque guard is a function of a free variable; the two are not independent, so
+            // enumerating them separately would admit impossible combinations. Give up.
+            FlagFacts.unknown
+        else
+            BitTree.flagFactsUnder atoms.IsFree condFormulas tree
 
     let checkTaskCompletionSourceCall
         (violations : ResizeArray<range>)
