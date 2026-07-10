@@ -14,6 +14,7 @@ module ThrowingInDisposeAnalyzer =
     let throwingFunctions =
         [
             "Microsoft.FSharp.Core.Operators.raise", "raise"
+            "Microsoft.FSharp.Core.Operators.reraise", "reraise"
             "Microsoft.FSharp.Core.Operators.failwith", "failwith"
             "Microsoft.FSharp.Core.Operators.failwithf", "failwithf"
             "Microsoft.FSharp.Core.Operators.invalidOp", "invalidOp"
@@ -80,8 +81,13 @@ module ThrowingInDisposeAnalyzer =
     let rec findThrowCalls (expr : FSharpExpr) (violations : ResizeArray<range * string>) =
         match expr with
         | FSharpExprPatterns.TryWith (_, _, _, _, catchExpr, _, _) ->
-            // Don't check the try body - exceptions there are caught
-            // But do check the catch handler - exceptions there can still escape
+            // Don't check the try body directly: any exception it throws is routed through the
+            // handler. If the handler swallows it, there is no escape; if it rethrows (or the match
+            // is selective), the escape shows up as a throwing call inside the handler expression.
+            // Crucially, the compiler compiles a non-exhaustive `with` (a selective `:?` filter or a
+            // `when` guard) into a handler whose fall-through branch calls `reraise ()`, so checking
+            // the handler for throwing functions catches both explicit rethrows and implicit ones
+            // from selective catches.
             findThrowCalls catchExpr violations
         | FSharpExprPatterns.TryFinally (tryExpr, finallyExpr, _, _) ->
             // TryFinally doesn't catch exceptions, so check both parts
