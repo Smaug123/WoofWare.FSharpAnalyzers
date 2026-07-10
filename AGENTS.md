@@ -1,29 +1,11 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Project Overview
-
-WoofWare.FSharpAnalyzers is an F# source analyzer library built using the Ionide FSharp.Analyzers.SDK. The project contains opinionated analyzers for detecting problematic F# patterns.
+WoofWare.FSharpAnalyzers is an F# source analyzer library built using the Ionide FSharp.Analyzers.SDK.
+The project contains opinionated analyzers.
 
 ## Build Commands
 
-The project uses both .NET CLI and Nix for building:
-
 ```bash
-# Restore dependencies
-dotnet restore
-# or with Nix:
 nix develop --command dotnet restore
-
-# Build the project
-dotnet build --no-restore --configuration Release
-# or with Nix:
-nix develop --command dotnet build --no-restore --configuration Release
-
-# Run tests
-dotnet test
-# or with Nix:
+nix develop --command dotnet build
 nix develop --command dotnet test
 
 # Format F# code with Fantomas
@@ -37,7 +19,9 @@ nix develop --command alejandra .
 
 ## Test Commands
 
-Tests use snapshot testing with automatic discovery:
+Tests use snapshot testing with automatic discovery.
+`WoofWare.FSharpAnalyzers.Test/Data/{AnalyzerName}Analyzer/negative/` contains F# files which are expected to contain no warnings when the named analyzer runs;
+`WoofWare.FSharpAnalyzers.Test/Data/{AnalyzerName}Analyzer/positive/foo.fs` contains F# files which are expected to produce warnings; and `WoofWare.FSharpAnalyzers.Test/Data/{AnalyzerName}Analyzer/positive/foo.fs.expected` snapshots the warnings.
 
 ```bash
 # Run all tests
@@ -65,22 +49,6 @@ Each analyzer is a module in the `WoofWare.FSharpAnalyzers` project with:
 ### Suppression Pattern
 
 Analyzers support suppression via magic comments on the preceding line. The `Deactivated.comment` utility function checks for suppression comments (e.g., `ANALYZER: synchronous blocking call allowed`) that appear on the line immediately before the analyzed code.
-
-### Test Infrastructure
-
-Tests use a reflection-based discovery system:
-- Test cases are organized in `WoofWare.FSharpAnalyzers.Test/Data/{AnalyzerName}/positive/` and `negative/` directories
-- `positive/` test cases should trigger diagnostics and have corresponding `.expected` files with the expected output
-- `negative/` test cases should not produce any diagnostics
-- Test files are embedded resources discovered via reflection at runtime
-- The test harness automatically finds analyzers by name and invokes their `cliAnalyzer` methods
-- Run the `[<Explicit>]` "Update snapshot" test to regenerate `.expected` files when analyzer output changes
-
-### Project Dependencies
-
-- Main project (`WoofWare.FSharpAnalyzers.fsproj`) targets `net8.0` and references `FSharp.Analyzers.SDK`
-- Test project (`WoofWare.FSharpAnalyzers.Test.fsproj`) targets `net9.0` and uses NUnit with `FSharp.Analyzers.SDK.Testing`
-- Both projects disable implicit FSharp.Core references as FSharp.Analyzers.SDK provides its own
 
 ### Adding New Analyzers
 
