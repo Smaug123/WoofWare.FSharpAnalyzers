@@ -177,53 +177,44 @@ module ThrowingInDisposeAnalyzer =
 
             Some $"%s{entityName}::%s{mfv.CompiledName}`%d{ownGenericArity mfv}(%s{paramTypes})"
 
-    /// The keys under which a member declaration answers calls: its own key, plus the keys
-    /// of any abstract slots it implements. (A virtual call is reported against the slot's
-    /// declaring type, while the body lives on the overriding type, which may be elsewhere
-    /// in the hierarchy.)
-    ///
-    /// `disposalReceiverTypes` contains the full names of every type an instance of which
-    /// can be disposed (the file's disposable types and their base classes). An override
-    /// answers its slot's key only if its declaring type is such a type: otherwise no
-    /// disposal can ever dispatch to it (e.g. a throwing override on a non-disposable
-    /// sibling of the type whose disposal calls the slot).
-    let private answeringKeys
-        (disposalReceiverTypes : Set<string>)
-        (mfv : FSharpMemberOrFunctionOrValue)
-        : string list
-        =
-        let declaringTypeCanBeDisposed =
-            match mfv.DeclaringEntity |> Option.bind (fun e -> e.TryGetFullName ()) with
-            | Some name -> Set.contains name disposalReceiverTypes
-            | None -> false
+    /// The keys of the abstract slots a member implements. (A virtual call is reported
+    /// against the slot's declaring type, while the body lives on the overriding type,
+    /// which may be elsewhere in the hierarchy.)
+    let private slotKeys (mfv : FSharpMemberOrFunctionOrValue) : string list =
+        mfv.ImplementedAbstractSignatures
+        |> Seq.choose (fun abs ->
+            if abs.DeclaringType.HasTypeDefinition then
+                match abs.DeclaringType.TypeDefinition.TryGetFullName () with
+                | Some entityName ->
+                    let paramTypes =
+                        abs.AbstractArguments
+                        |> Seq.collect id
+                        |> Seq.map (fun p -> p.Type)
+                        |> parameterKeys
 
-        let slotKeys =
-            if not declaringTypeCanBeDisposed then
-                []
+                    Some $"%s{entityName}::%s{abs.Name}`%d{abs.MethodGenericParameters.Count}(%s{paramTypes})"
+                | None -> None
             else
-                mfv.ImplementedAbstractSignatures
-                |> Seq.choose (fun abs ->
-                    if abs.DeclaringType.HasTypeDefinition then
-                        match abs.DeclaringType.TypeDefinition.TryGetFullName () with
-                        | Some entityName ->
-                            let paramTypes =
-                                abs.AbstractArguments
-                                |> Seq.collect id
-                                |> Seq.map (fun p -> p.Type)
-                                |> parameterKeys
+                None
+        )
+        |> List.ofSeq
 
-                            Some $"%s{entityName}::%s{abs.Name}`%d{abs.MethodGenericParameters.Count}(%s{paramTypes})"
-                        | None -> None
-                    else
-                        None
-                )
-                |> List.ofSeq
+    /// The full names of an entity and all its base classes, most-derived first
+    let rec private selfAndAncestorNames (entity : FSharpEntity) : string list =
+        let self = entity.TryGetFullName () |> Option.toList
 
-        (memberKey mfv |> Option.toList) @ slotKeys
+        match entity.BaseType with
+        | Some baseType when baseType.HasTypeDefinition ->
+            self @ selfAndAncestorNames ((baseType.StripAbbreviations ()).TypeDefinition)
+        | _ -> self
 
     /// Recursively walk an expression, collecting every member called on it whose compiled
-    /// name is Dispose
-    let rec private findDisposeCallees (expr : FSharpExpr) (acc : ResizeArray<FSharpMemberOrFunctionOrValue>) =
+    /// name is Dispose, along with the static type of the call's receiver (which bounds the
+    /// overrides a virtual call can dispatch to)
+    let rec private findDisposeCallees
+        (expr : FSharpExpr)
+        (acc : ResizeArray<FSharpMemberOrFunctionOrValue * FSharpType option>)
+        =
         match expr with
         | FSharpExprPatterns.TryWith (_, _, _, _, catchExpr, _, _) ->
             // Mirror findThrowCalls: a Dispose call inside the try body has its exceptions
@@ -234,7 +225,8 @@ module ThrowingInDisposeAnalyzer =
         | _ ->
 
         match expr with
-        | FSharpExprPatterns.Call (_, mfv, _, _, _) when mfv.CompiledName = "Dispose" -> acc.Add mfv
+        | FSharpExprPatterns.Call (objExprOpt, mfv, _, _, _) when mfv.CompiledName = "Dispose" ->
+            acc.Add (mfv, objExprOpt |> Option.map (fun objExpr -> objExpr.Type))
         | _ -> ()
 
         expr.ImmediateSubExpressions
@@ -340,9 +332,8 @@ module ThrowingInDisposeAnalyzer =
     let analyze (typedTree : FSharpImplementationFileContents) =
         let violations = ResizeArray<range * string> ()
 
-        // Collect all declarations up front: identifying the disposal members requires a
-        // whole-file view before any body can be checked.
-        let entities = ResizeArray<FSharpEntity> ()
+        // Collect all member declarations (and init actions) up front: identifying the
+        // disposal members requires a whole-file view before any body can be checked.
         let memberDecls = ResizeArray<FSharpMemberOrFunctionOrValue * FSharpExpr> ()
         let initActions = ResizeArray<FSharpExpr> ()
 
@@ -350,40 +341,13 @@ module ThrowingInDisposeAnalyzer =
             decls
             |> List.iter (fun decl ->
                 match decl with
-                | FSharpImplementationFileDeclaration.Entity (entity, subDecls) ->
-                    entities.Add entity
-                    collectDeclarations subDecls
+                | FSharpImplementationFileDeclaration.Entity (_, subDecls) -> collectDeclarations subDecls
                 | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (mfv, _, expr) ->
                     memberDecls.Add (mfv, expr)
                 | FSharpImplementationFileDeclaration.InitAction expr -> initActions.Add expr
             )
 
         collectDeclarations typedTree.Declarations
-
-        // Full names of every type an instance of which can be disposed: the file's
-        // disposable types together with all their base classes. (A disposable subclass
-        // declared in a *different* file will not be seen here; that false negative is
-        // inherent to per-file analysis.)
-        let disposalReceiverTypes =
-            let rec selfAndBases (typ : FSharpType option) =
-                seq {
-                    match typ with
-                    | Some typ when typ.HasTypeDefinition ->
-                        let def = (typ.StripAbbreviations ()).TypeDefinition
-                        yield def
-                        yield! selfAndBases def.BaseType
-                    | _ -> ()
-                }
-
-            entities
-            |> Seq.filter (fun entity ->
-                not entity.IsNamespace && not entity.IsFSharpModule && entityIsDisposable entity
-            )
-            |> Seq.collect (fun entity -> Seq.append (Seq.singleton entity) (selfAndBases entity.BaseType))
-            |> Seq.choose (fun entity -> entity.TryGetFullName ())
-            |> Set.ofSeq
-
-        let answeringKeys = answeringKeys disposalReceiverTypes
 
         // Disposal is often delegated to a member that local evidence alone does not
         // identify as disposal: a helper inherited from a non-disposable base class, or a
@@ -392,17 +356,100 @@ module ThrowingInDisposeAnalyzer =
         // disposal member; anything reached is part of a disposal path. (A disposable type
         // declared in a *different* file delegating to a helper in this one will not be seen
         // here; that false negative is inherent to per-file analysis.)
-        let delegatedDisposal : System.Collections.Generic.HashSet<string> =
-            let disposeDeclsByKey =
+        //
+        // The result is the set of indices into memberDecls of the reached declarations.
+        let reachedDecls : System.Collections.Generic.HashSet<int> =
+            // Same-file Dispose-named declarations, which a traced call can resolve to.
+            let disposeDecls =
                 memberDecls
-                |> Seq.filter (fun (mfv, _) -> mfv.CompiledName = "Dispose")
-                |> Seq.collect (fun (mfv, expr) -> answeringKeys mfv |> Seq.map (fun key -> key, expr))
-                |> Seq.groupBy fst
-                |> Seq.map (fun (key, decls) -> key, decls |> Seq.map snd |> List.ofSeq)
-                |> Map.ofSeq
+                |> Seq.indexed
+                |> Seq.filter (fun (_, (mfv, _)) -> mfv.CompiledName = "Dispose")
+                |> Seq.map (fun (i, (mfv, expr)) -> i, mfv, expr, memberKey mfv, slotKeys mfv)
+                |> List.ofSeq
 
-            let reached = System.Collections.Generic.HashSet<string> ()
-            let queue = System.Collections.Generic.Queue<FSharpExpr> ()
+            // Resolve one traced call to the declaration indices whose bodies it can
+            // execute.
+            let resolveCallee (callee : FSharpMemberOrFunctionOrValue) (receiverType : FSharpType option) : int list =
+                match memberKey callee with
+                | None -> []
+                | Some calleeKey ->
+
+                // Declarations the call resolves to statically.
+                let direct =
+                    disposeDecls
+                    |> List.filter (fun (_, _, _, ownKey, _) -> ownKey = Some calleeKey)
+                    |> List.map (fun (i, _, _, _, _) -> i)
+
+                // Overrides the call can dispatch to virtually. The receiver's static type
+                // bounds the possibilities: the executing body is the most-derived override
+                // at or above the receiver's *dynamic* type, which is the receiver's static
+                // type or a subtype of it.
+                let viaDispatch =
+                    let receiverEntity =
+                        receiverType
+                        |> Option.map (fun typ -> typ.StripAbbreviations ())
+                        |> Option.bind (fun typ ->
+                            if typ.HasTypeDefinition then
+                                Some typ.TypeDefinition
+                            else
+                                None
+                        )
+
+                    match receiverEntity with
+                    | None -> []
+                    | Some receiverEntity ->
+                        let receiverChain = selfAndAncestorNames receiverEntity
+
+                        let candidates =
+                            disposeDecls
+                            |> List.choose (fun (i, mfv, _, _, slotKeys) ->
+                                if List.contains calleeKey slotKeys then
+                                    mfv.DeclaringEntity |> Option.map (fun entity -> i, entity)
+                                else
+                                    None
+                            )
+
+                        // An override on the receiver's own chain executes only if no other
+                        // same-file override sits strictly closer to the receiver (which
+                        // would shadow it for every dynamic type at or below the receiver's
+                        // static type); keep just the most-derived.
+                        let mostDerivedAncestorSide =
+                            candidates
+                            |> List.choose (fun (i, entity) ->
+                                entity.TryGetFullName ()
+                                |> Option.bind (fun name -> receiverChain |> List.tryFindIndex ((=) name))
+                                |> Option.map (fun position -> i, position)
+                            )
+                            |> function
+                                | [] -> []
+                                | positioned ->
+                                    let mostDerived = positioned |> List.map snd |> List.min
+
+                                    positioned
+                                    |> List.filter (fun (_, position) -> position = mostDerived)
+                                    |> List.map fst
+
+                        // An override on a subtype of the receiver can execute whenever the
+                        // dynamic type is that subtype (or below).
+                        let descendantSide =
+                            let receiverName = receiverEntity.TryGetFullName ()
+
+                            candidates
+                            |> List.filter (fun (_, entity) ->
+                                match entity.TryGetFullName (), receiverName with
+                                | Some name, Some receiverName ->
+                                    // Strictly below the receiver: candidates on the
+                                    // receiver's own chain are handled (with shadowing)
+                                    // above.
+                                    not (List.contains name receiverChain)
+                                    && List.contains receiverName (selfAndAncestorNames entity)
+                                | _ -> false
+                            )
+                            |> List.map fst
+
+                        mostDerivedAncestorSide @ descendantSide
+
+                (direct @ viaDispatch) |> List.distinct
 
             // A finalizer participates in disposal (`override this.Finalize () =
             // this.Dispose false` is the classic pattern), so it seeds the trace alongside
@@ -417,34 +464,35 @@ module ThrowingInDisposeAnalyzer =
                     |> Seq.collect id
                     |> Seq.forall (fun p -> typeKey p.Type = "Microsoft.FSharp.Core.Unit"))
 
+            let reached = System.Collections.Generic.HashSet<int> ()
+            let visited = System.Collections.Generic.HashSet<int> ()
+            let queue = System.Collections.Generic.Queue<FSharpExpr> ()
+
             memberDecls
-            |> Seq.filter (fun (mfv, _) -> isDisposeMember mfv || isFinalizer mfv)
-            |> Seq.iter (snd >> queue.Enqueue)
+            |> Seq.iteri (fun i (mfv, expr) ->
+                if isDisposeMember mfv || isFinalizer mfv then
+                    visited.Add i |> ignore
+                    queue.Enqueue expr
+            )
 
             while queue.Count > 0 do
                 let body = queue.Dequeue ()
-                let callees = ResizeArray<FSharpMemberOrFunctionOrValue> ()
+                let callees = ResizeArray<FSharpMemberOrFunctionOrValue * FSharpType option> ()
                 findDisposeCallees body callees
 
-                for callee in callees do
-                    match memberKey callee with
-                    | Some key when reached.Add key ->
-                        match Map.tryFind key disposeDeclsByKey with
-                        | Some bodies -> bodies |> List.iter queue.Enqueue
-                        | None -> ()
-                    | _ -> ()
+                for callee, receiverType in callees do
+                    for i in resolveCallee callee receiverType do
+                        reached.Add i |> ignore
+
+                        if visited.Add i then
+                            queue.Enqueue (snd memberDecls.[i])
 
             reached
 
-        let isDisposal (mfv : FSharpMemberOrFunctionOrValue) =
-            isDisposeMember mfv
-            || (mfv.CompiledName = "Dispose"
-                && (answeringKeys mfv |> List.exists delegatedDisposal.Contains))
-
         memberDecls
-        |> Seq.iter (fun (mfv, expr) ->
+        |> Seq.iteri (fun i (mfv, expr) ->
             // Check if this is a Dispose method
-            if isDisposal mfv then
+            if isDisposeMember mfv || reachedDecls.Contains i then
                 // Walk the expression to find throw calls
                 findThrowCalls expr violations
             else
