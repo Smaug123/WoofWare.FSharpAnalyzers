@@ -295,10 +295,11 @@ module ThrowingInDisposeAnalyzer =
                 && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
             ))
 
-    /// Recursively walk expressions to find object expressions implementing IDisposable
-    let rec findObjectExpressions (expr : FSharpExpr) (violations : ResizeArray<range * string>) =
+    /// Recursively walk an expression, collecting the Dispose bodies of object expressions
+    /// implementing IDisposable
+    let rec private findAnonymousDisposeBodies (expr : FSharpExpr) (acc : ResizeArray<FSharpExpr>) =
         match expr with
-        | FSharp.Compiler.Symbols.FSharpExprPatterns.ObjectExpr (typ, baseCall, overrides, interfaceImpls) ->
+        | FSharp.Compiler.Symbols.FSharpExprPatterns.ObjectExpr (typ, _, overrides, interfaceImpls) ->
             // Check each override for Dispose methods (if type implements IDisposable)
             if implementsIDisposable typ then
                 overrides
@@ -311,7 +312,7 @@ module ThrowingInDisposeAnalyzer =
                             && signature.DeclaringType.TypeDefinition.TryGetFullName () = Some "System.IDisposable")
 
                     if isDispose then
-                        findThrowCalls objMember.Body violations
+                        acc.Add objMember.Body
                 )
 
             // Always check interface implementations for IDisposable (e.g., { new IDisposable with ... })
@@ -326,17 +327,22 @@ module ThrowingInDisposeAnalyzer =
                     members
                     |> List.iter (fun objMember ->
                         // All members of IDisposable are Dispose methods
-                        findThrowCalls objMember.Body violations
+                        acc.Add objMember.Body
                     )
             )
 
-            // Continue walking sub-expressions
             expr.ImmediateSubExpressions
-            |> Seq.iter (fun subExpr -> findObjectExpressions subExpr violations)
+            |> Seq.iter (fun subExpr -> findAnonymousDisposeBodies subExpr acc)
         | _ ->
-            // Walk all sub-expressions
             expr.ImmediateSubExpressions
-            |> Seq.iter (fun subExpr -> findObjectExpressions subExpr violations)
+            |> Seq.iter (fun subExpr -> findAnonymousDisposeBodies subExpr acc)
+
+    /// Recursively walk expressions to find object expressions implementing IDisposable,
+    /// flagging throws in their Dispose implementations
+    let findObjectExpressions (expr : FSharpExpr) (violations : ResizeArray<range * string>) =
+        let bodies = ResizeArray<FSharpExpr> ()
+        findAnonymousDisposeBodies expr bodies
+        bodies |> Seq.iter (fun body -> findThrowCalls body violations)
 
     let analyze (typedTree : FSharpImplementationFileContents) =
         let violations = ResizeArray<range * string> ()
@@ -496,6 +502,19 @@ module ThrowingInDisposeAnalyzer =
                     visited.Add i |> ignore
                     queue.Enqueue expr
             )
+
+            // Anonymous IDisposable implementations (object expressions) are disposal too:
+            // their Dispose bodies seed the trace so that helpers they delegate to are
+            // recognised. (Their direct throws are flagged separately, below.)
+            let anonymousBodies = ResizeArray<FSharpExpr> ()
+
+            memberDecls
+            |> Seq.iter (fun (_, expr) -> findAnonymousDisposeBodies expr anonymousBodies)
+
+            initActions
+            |> Seq.iter (fun expr -> findAnonymousDisposeBodies expr anonymousBodies)
+
+            anonymousBodies |> Seq.iter queue.Enqueue
 
             while queue.Count > 0 do
                 let body = queue.Dequeue ()
