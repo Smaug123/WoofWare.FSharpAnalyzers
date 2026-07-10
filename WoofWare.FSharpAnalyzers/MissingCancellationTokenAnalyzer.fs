@@ -38,18 +38,62 @@ module MissingCancellationTokenAnalyzer =
         mfv.CurriedParameterGroups
         |> Seq.exists (fun group -> group |> Seq.exists (fun param -> isCancellationToken param.Type))
 
-    /// Get parameter types for comparison (excluding CancellationToken)
-    let getParameterSignature (mfv : FSharpMemberOrFunctionOrValue) =
+    /// Strip type abbreviations (e.g. `int` for `System.Int32`) so that types compare
+    /// equal regardless of how they were written.
+    let rec stripAbbreviations (typ : FSharpType) : FSharpType =
+        if typ.IsAbbreviation then
+            stripAbbreviations typ.AbbreviatedType
+        else
+            typ
+
+    /// Structural equality of types, up to type abbreviations. Distinguishes generic
+    /// instantiations (e.g. List<int> vs List<string>) and array element types.
+    let rec typesMatch (ty1 : FSharpType) (ty2 : FSharpType) : bool =
+        let ty1 = stripAbbreviations ty1
+        let ty2 = stripAbbreviations ty2
+
+        let genericArgumentsMatch () =
+            ty1.GenericArguments.Count = ty2.GenericArguments.Count
+            && Seq.forall2 typesMatch ty1.GenericArguments ty2.GenericArguments
+
+        if ty1.IsGenericParameter && ty2.IsGenericParameter then
+            ty1.GenericParameter.Name = ty2.GenericParameter.Name
+        elif ty1.HasTypeDefinition && ty2.HasTypeDefinition then
+            // Arrays land here too: the type definition is the array type constructor
+            // (per rank), and the element type is a generic argument.
+            ty1.TypeDefinition = ty2.TypeDefinition && genericArgumentsMatch ()
+        elif ty1.IsTupleType && ty2.IsTupleType then
+            ty1.IsStructTupleType = ty2.IsStructTupleType && genericArgumentsMatch ()
+        elif ty1.IsFunctionType && ty2.IsFunctionType then
+            genericArgumentsMatch ()
+        elif ty1.IsAnonRecordType && ty2.IsAnonRecordType then
+            ty1.AnonRecordTypeDetails.SortedFieldNames = ty2.AnonRecordTypeDetails.SortedFieldNames
+            && genericArgumentsMatch ()
+        else
+            false
+
+    /// Get parameter types for comparison, excluding CancellationToken parameters but
+    /// preserving the curried-group structure (groups left empty by the exclusion are
+    /// dropped, so `M ()` matches `M (ct : CancellationToken)`).
+    let getParameterSignature (mfv : FSharpMemberOrFunctionOrValue) : FSharpType list list =
         mfv.CurriedParameterGroups
-        |> Seq.collect id
-        |> Seq.filter (fun param -> not (isCancellationToken param.Type))
-        |> Seq.map (fun param ->
-            if param.Type.HasTypeDefinition then
-                param.Type.TypeDefinition.TryGetFullName ()
-            else
-                None
+        |> Seq.map (fun group ->
+            group
+            |> Seq.filter (fun param -> not (isCancellationToken param.Type))
+            |> Seq.map (fun param -> param.Type)
+            |> Seq.toList
         )
+        |> Seq.filter (not << List.isEmpty)
         |> Seq.toList
+
+    let signaturesMatch (sig1 : FSharpType list list) (sig2 : FSharpType list list) : bool =
+        sig1.Length = sig2.Length
+        && List.forall2
+            (fun (group1 : FSharpType list) (group2 : FSharpType list) ->
+                group1.Length = group2.Length && List.forall2 typesMatch group1 group2
+            )
+            sig1
+            sig2
 
     /// Find overloads of a method that accept CancellationToken
     let hasOverloadWithCancellationToken (mfv : FSharpMemberOrFunctionOrValue) =
@@ -62,10 +106,13 @@ module MissingCancellationTokenAnalyzer =
                 // Same name and member kind
                 m.CompiledName = mfv.CompiledName
                 && m.IsInstanceMember = mfv.IsInstanceMember
+                && m.GenericParameters.Count = mfv.GenericParameters.Count
                 // Has CancellationToken parameter
                 && hasCancellationTokenParam m
                 // Same parameters (except for the CancellationToken)
-                && getParameterSignature m = currentParamSignature
+                && signaturesMatch (getParameterSignature m) currentParamSignature
+                // Same return type, so the overload is a drop-in replacement
+                && typesMatch m.ReturnParameter.Type mfv.ReturnParameter.Type
             )
         | None -> false
 
