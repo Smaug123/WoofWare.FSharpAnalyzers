@@ -124,6 +124,40 @@ module ThrowingInDisposeAnalyzer =
         else
             false
 
+    /// Render a type for use in member keys, including generic arguments so that overloads
+    /// such as `Dispose (xs : int list)` and `Dispose (xs : string list)` get distinct keys
+    let rec private typeKey (typ : FSharpType) : string =
+        let typ = typ.StripAbbreviations ()
+
+        if typ.IsGenericParameter then
+            // Distinguishing overloads on generic parameters is out of scope, so a stable
+            // placeholder suffices.
+            "<generic>"
+        elif typ.HasTypeDefinition then
+            let name =
+                match typ.TypeDefinition.TryGetFullName () with
+                | Some name -> name
+                | None -> typ.TypeDefinition.LogicalName
+
+            if typ.GenericArguments.Count = 0 then
+                name
+            else
+                let args = typ.GenericArguments |> Seq.map typeKey |> String.concat ","
+                $"%s{name}<%s{args}>"
+        else
+            // Tuples, function types, anonymous records, ...: distinguishing overloads on
+            // these is out of scope.
+            "<other>"
+
+    let private parameterKeys (paramTypes : FSharpType seq) : string =
+        paramTypes
+        |> Seq.map typeKey
+        // A lone unit parameter and an empty parameter list are the same member shape;
+        // normalise so that keys computed from declarations, call sites, and abstract slots
+        // all agree.
+        |> Seq.filter (fun key -> key <> "Microsoft.FSharp.Core.Unit")
+        |> String.concat ","
+
     /// A key identifying a member such that the same member observed at a call site and at
     /// its declaration produces the same key. None if the member has no named declaring
     /// entity (e.g. a local function).
@@ -134,25 +168,49 @@ module ThrowingInDisposeAnalyzer =
             let paramTypes =
                 mfv.CurriedParameterGroups
                 |> Seq.collect id
-                |> Seq.map (fun p ->
-                    let paramType = p.Type.StripAbbreviations ()
-
-                    if paramType.HasTypeDefinition then
-                        match paramType.TypeDefinition.TryGetFullName () with
-                        | Some name -> name
-                        | None -> paramType.TypeDefinition.LogicalName
-                    else
-                        // e.g. a generic parameter; distinguishing overloads on these is out
-                        // of scope, so a stable placeholder suffices
-                        "<generic>"
-                )
-                |> String.concat ","
+                |> Seq.map (fun p -> p.Type)
+                |> parameterKeys
 
             Some $"%s{entityName}::%s{mfv.CompiledName}(%s{paramTypes})"
+
+    /// The keys under which a member declaration answers calls: its own key, plus the keys
+    /// of any abstract slots it implements. (A virtual call is reported against the slot's
+    /// declaring type, while the body lives on the overriding type, which may be elsewhere
+    /// in the hierarchy.)
+    let private answeringKeys (mfv : FSharpMemberOrFunctionOrValue) : string list =
+        let slotKeys =
+            mfv.ImplementedAbstractSignatures
+            |> Seq.choose (fun abs ->
+                if abs.DeclaringType.HasTypeDefinition then
+                    match abs.DeclaringType.TypeDefinition.TryGetFullName () with
+                    | Some entityName ->
+                        let paramTypes =
+                            abs.AbstractArguments
+                            |> Seq.collect id
+                            |> Seq.map (fun p -> p.Type)
+                            |> parameterKeys
+
+                        Some $"%s{entityName}::%s{abs.Name}(%s{paramTypes})"
+                    | None -> None
+                else
+                    None
+            )
+            |> List.ofSeq
+
+        (memberKey mfv |> Option.toList) @ slotKeys
 
     /// Recursively walk an expression, collecting every member called on it whose compiled
     /// name is Dispose
     let rec private findDisposeCallees (expr : FSharpExpr) (acc : ResizeArray<FSharpMemberOrFunctionOrValue>) =
+        match expr with
+        | FSharpExprPatterns.TryWith (_, _, _, _, catchExpr, _, _) ->
+            // Mirror findThrowCalls: a Dispose call inside the try body has its exceptions
+            // routed through the handler, so it is not an escape path for disposal. If the
+            // handler is selective, the escape surfaces as the handler's (implicit) reraise,
+            // which findThrowCalls flags in the calling member itself.
+            findDisposeCallees catchExpr acc
+        | _ ->
+
         match expr with
         | FSharpExprPatterns.Call (_, mfv, _, _, _) when mfv.CompiledName = "Dispose" -> acc.Add mfv
         | _ -> ()
@@ -288,7 +346,7 @@ module ThrowingInDisposeAnalyzer =
             let disposeDeclsByKey =
                 memberDecls
                 |> Seq.filter (fun (mfv, _) -> mfv.CompiledName = "Dispose")
-                |> Seq.choose (fun (mfv, expr) -> memberKey mfv |> Option.map (fun key -> key, expr))
+                |> Seq.collect (fun (mfv, expr) -> answeringKeys mfv |> Seq.map (fun key -> key, expr))
                 |> Seq.groupBy fst
                 |> Seq.map (fun (key, decls) -> key, decls |> Seq.map snd |> List.ofSeq)
                 |> Map.ofSeq
@@ -296,8 +354,19 @@ module ThrowingInDisposeAnalyzer =
             let reached = System.Collections.Generic.HashSet<string> ()
             let queue = System.Collections.Generic.Queue<FSharpExpr> ()
 
+            // A finalizer participates in disposal (`override this.Finalize () =
+            // this.Dispose false` is the classic pattern), so it seeds the trace alongside
+            // the locally-identified Dispose members. Its own body is not checked for
+            // throws, though: it is not a Dispose method.
+            let isFinalizer (mfv : FSharpMemberOrFunctionOrValue) =
+                mfv.CompiledName = "Finalize"
+                && mfv.IsInstanceMember
+                && (mfv.CurriedParameterGroups
+                    |> Seq.collect id
+                    |> Seq.forall (fun p -> typeKey p.Type = "Microsoft.FSharp.Core.Unit"))
+
             memberDecls
-            |> Seq.filter (fst >> isDisposeMember)
+            |> Seq.filter (fun (mfv, _) -> isDisposeMember mfv || isFinalizer mfv)
             |> Seq.iter (snd >> queue.Enqueue)
 
             while queue.Count > 0 do
@@ -318,11 +387,7 @@ module ThrowingInDisposeAnalyzer =
         let isDisposal (mfv : FSharpMemberOrFunctionOrValue) =
             isDisposeMember mfv
             || (mfv.CompiledName = "Dispose"
-                && (
-                    match memberKey mfv with
-                    | Some key -> delegatedDisposal.Contains key
-                    | None -> false
-                ))
+                && (answeringKeys mfv |> List.exists delegatedDisposal.Contains))
 
         memberDecls
         |> Seq.iter (fun (mfv, expr) ->
