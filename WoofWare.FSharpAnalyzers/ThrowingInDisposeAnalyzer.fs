@@ -24,6 +24,19 @@ module ThrowingInDisposeAnalyzer =
         ]
         |> Map.ofList
 
+    /// Check if a type implements IDisposable
+    let implementsIDisposable (typ : FSharpType) =
+        if not typ.HasTypeDefinition then
+            false
+        else
+
+        typ.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
+        || (typ.TypeDefinition.AllInterfaces
+            |> Seq.exists (fun iface ->
+                iface.HasTypeDefinition
+                && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
+            ))
+
     /// Check if a member is a Dispose method (either IDisposable.Dispose or Dispose(bool))
     let isDisposeMember (mfv : FSharpMemberOrFunctionOrValue) =
         // Check for both "Dispose" and "System.IDisposable.Dispose" (explicit interface implementation)
@@ -34,6 +47,21 @@ module ThrowingInDisposeAnalyzer =
                 |> Seq.exists (fun abs ->
                     abs.DeclaringType.HasTypeDefinition
                     && abs.DeclaringType.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
+                )
+
+            // Check if this overrides an abstract parameterless `Dispose` slot declared on a
+            // disposable base class. This is the effective disposal hook in the pattern where a
+            // base class implements `IDisposable.Dispose ()` by delegating to an abstract
+            // `Dispose ()` that derived classes override: FCS reports the override's implemented
+            // signature as `Base.Dispose`, not `System.IDisposable.Dispose`, so the check above
+            // misses it. Requiring the slot to be parameterless keeps unrelated overloads such as
+            // an abstract `Dispose (reason : string)` unflagged.
+            let overridesDisposalHook =
+                mfv.ImplementedAbstractSignatures
+                |> Seq.exists (fun abs ->
+                    abs.Name = "Dispose"
+                    && (abs.AbstractArguments |> Seq.sumBy Seq.length) = 0
+                    && implementsIDisposable abs.DeclaringType
                 )
 
             // Check if it's a Dispose(bool) helper method (common dispose pattern).
@@ -55,7 +83,7 @@ module ThrowingInDisposeAnalyzer =
                 else
                     false
 
-            implementsIDisposableDispose || isDisposeBool
+            implementsIDisposableDispose || overridesDisposalHook || isDisposeBool
         else
             false
 
@@ -99,19 +127,6 @@ module ThrowingInDisposeAnalyzer =
             // Walk all sub-expressions
             expr.ImmediateSubExpressions
             |> Seq.iter (fun subExpr -> findThrowCalls subExpr violations)
-
-    /// Check if a type implements IDisposable
-    let implementsIDisposable (typ : FSharpType) =
-        if not typ.HasTypeDefinition then
-            false
-        else
-
-        typ.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
-        || (typ.TypeDefinition.AllInterfaces
-            |> Seq.exists (fun iface ->
-                iface.HasTypeDefinition
-                && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
-            ))
 
     /// Recursively walk expressions to find object expressions implementing IDisposable
     let rec findObjectExpressions (expr : FSharpExpr) (violations : ResizeArray<range * string>) =
