@@ -25,6 +25,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="Ternary.fs" />
+    <Compile Include="BoolFormula.fs" />
     <Compile Include="BlockingCallsAnalyzer.fs" />
     <Compile Include="EarlyReturnAnalyzer.fs" />
     <Compile Include="MissingCancellationTokenAnalyzer.fs" />
