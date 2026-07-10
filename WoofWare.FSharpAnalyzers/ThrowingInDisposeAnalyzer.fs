@@ -32,11 +32,12 @@ module ThrowingInDisposeAnalyzer =
             && iface.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
         )
 
-    /// Check if a member is a Dispose method (either IDisposable.Dispose or Dispose(bool)).
-    /// `basesOfDisposables` contains the full names of every class from which some disposable
-    /// type in the current file inherits; a Dispose helper declared on such a class is part of
-    /// a disposal path even though the class itself is not disposable.
-    let isDisposeMember (basesOfDisposables : Set<string>) (mfv : FSharpMemberOrFunctionOrValue) =
+    /// Check if a member is a Dispose method (either IDisposable.Dispose or Dispose(bool)),
+    /// judging by local evidence alone: the member's own signature and its declaring type.
+    /// This misses disposal helpers that only *delegation* identifies (e.g. a helper
+    /// inherited from a non-disposable base class); `analyze` recovers those by tracing
+    /// Dispose-named calls from the members this function accepts.
+    let isDisposeMember (mfv : FSharpMemberOrFunctionOrValue) =
         // Check for both "Dispose" and "System.IDisposable.Dispose" (explicit interface implementation)
         if mfv.CompiledName = "Dispose" || mfv.CompiledName = "System.IDisposable.Dispose" then
             // Check if this is implementing IDisposable.Dispose
@@ -47,19 +48,11 @@ module ThrowingInDisposeAnalyzer =
                     && abs.DeclaringType.TypeDefinition.TryGetFullName () = Some "System.IDisposable"
                 )
 
-            // Whether the type declaring this member is part of a disposal path: either it
-            // implements IDisposable itself (directly or via a base class), or some disposable
-            // type in this file inherits from it (the classic pattern where a non-disposable
-            // base declares the cleanup helper and a disposable subclass delegates to it).
+            // Whether the type declaring this member implements IDisposable, directly or via
+            // a base class.
             let enclosingTypeIsDisposable =
                 match mfv.DeclaringEntity with
-                | Some entity ->
-                    entityIsDisposable entity
-                    || (
-                        match entity.TryGetFullName () with
-                        | Some name -> Set.contains name basesOfDisposables
-                        | None -> false
-                    )
+                | Some entity -> entityIsDisposable entity
                 | None -> false
 
             // A `Dispose` member on a disposable type counts as disposal only if its signature is
@@ -101,11 +94,12 @@ module ThrowingInDisposeAnalyzer =
             // returning unit; a static `Dispose ()`, a value-returning `Dispose ()`, or a
             // generic `Dispose<'a> ()` is not disposal even on a disposable type.
             //
-            // One wrinkle: a member whose body throws on every path, such as
+            // (A member whose body throws on every path, such as
             // `member this.Dispose () = raise ...`, is generalised by inference to a generic
-            // member returning its own fresh type parameter. Such a member can only ever
-            // throw, so a generic-parameter return type counts as disposal-compatible rather
-            // than disqualifying the member.
+            // member returning its own fresh type parameter, so it fails this check. That is
+            // deliberate: by signature alone it is indistinguishable from an unrelated
+            // overload like `Dispose<'a> () : 'a`. Such a member is flagged only when the
+            // delegation trace in `analyze` shows disposal actually calls it.)
             let hasDisposalSignature =
                 let ret = mfv.ReturnParameter.Type.StripAbbreviations ()
 
@@ -123,13 +117,48 @@ module ThrowingInDisposeAnalyzer =
 
                     mfv.GenericParameters.Count > enclosingCount
 
-                mfv.IsInstanceMember
-                && ((returnsUnit && not hasOwnGenericParameters) || ret.IsGenericParameter)
+                mfv.IsInstanceMember && returnsUnit && not hasOwnGenericParameters
 
             implementsIDisposableDispose
             || (enclosingTypeIsDisposable && isDisposalShaped && hasDisposalSignature)
         else
             false
+
+    /// A key identifying a member such that the same member observed at a call site and at
+    /// its declaration produces the same key. None if the member has no named declaring
+    /// entity (e.g. a local function).
+    let private memberKey (mfv : FSharpMemberOrFunctionOrValue) : string option =
+        match mfv.DeclaringEntity |> Option.bind (fun e -> e.TryGetFullName ()) with
+        | None -> None
+        | Some entityName ->
+            let paramTypes =
+                mfv.CurriedParameterGroups
+                |> Seq.collect id
+                |> Seq.map (fun p ->
+                    let paramType = p.Type.StripAbbreviations ()
+
+                    if paramType.HasTypeDefinition then
+                        match paramType.TypeDefinition.TryGetFullName () with
+                        | Some name -> name
+                        | None -> paramType.TypeDefinition.LogicalName
+                    else
+                        // e.g. a generic parameter; distinguishing overloads on these is out
+                        // of scope, so a stable placeholder suffices
+                        "<generic>"
+                )
+                |> String.concat ","
+
+            Some $"%s{entityName}::%s{mfv.CompiledName}(%s{paramTypes})"
+
+    /// Recursively walk an expression, collecting every member called on it whose compiled
+    /// name is Dispose
+    let rec private findDisposeCallees (expr : FSharpExpr) (acc : ResizeArray<FSharpMemberOrFunctionOrValue>) =
+        match expr with
+        | FSharpExprPatterns.Call (_, mfv, _, _, _) when mfv.CompiledName = "Dispose" -> acc.Add mfv
+        | _ -> ()
+
+        expr.ImmediateSubExpressions
+        |> Seq.iter (fun subExpr -> findDisposeCallees subExpr acc)
 
     /// Recursively walk an expression to find throw calls (not caught by try-catch)
     let rec findThrowCalls (expr : FSharpExpr) (violations : ResizeArray<range * string>) =
@@ -231,58 +260,83 @@ module ThrowingInDisposeAnalyzer =
     let analyze (typedTree : FSharpImplementationFileContents) =
         let violations = ResizeArray<range * string> ()
 
-        // Full names of every class from which some disposable type in this file inherits.
-        // (A disposable subclass declared in a *different* file will not be seen here; that
-        // false negative is inherent to per-file analysis.)
-        let basesOfDisposables =
-            let rec collectEntities (decls : FSharpImplementationFileDeclaration list) =
-                seq {
-                    for decl in decls do
-                        match decl with
-                        | FSharpImplementationFileDeclaration.Entity (entity, subDecls) ->
-                            yield entity
-                            yield! collectEntities subDecls
-                        | _ -> ()
-                }
+        // Collect all member declarations (and init actions) up front: identifying the
+        // disposal members requires a whole-file view before any body can be checked.
+        let memberDecls = ResizeArray<FSharpMemberOrFunctionOrValue * FSharpExpr> ()
+        let initActions = ResizeArray<FSharpExpr> ()
 
-            let rec baseChain (typ : FSharpType option) =
-                seq {
-                    match typ with
-                    | Some typ when typ.HasTypeDefinition ->
-                        let def = (typ.StripAbbreviations ()).TypeDefinition
-                        yield def
-                        yield! baseChain def.BaseType
-                    | _ -> ()
-                }
-
-            collectEntities typedTree.Declarations
-            |> Seq.filter (fun entity ->
-                not entity.IsNamespace && not entity.IsFSharpModule && entityIsDisposable entity
-            )
-            |> Seq.collect (fun entity -> baseChain entity.BaseType)
-            |> Seq.choose (fun entity -> entity.TryGetFullName ())
-            |> Set.ofSeq
-
-        // Walk all declarations
-        let rec walkDeclarations (decls : FSharpImplementationFileDeclaration list) =
+        let rec collectDeclarations (decls : FSharpImplementationFileDeclaration list) =
             decls
             |> List.iter (fun decl ->
                 match decl with
-                | FSharpImplementationFileDeclaration.Entity (_, subDecls) -> walkDeclarations subDecls
+                | FSharpImplementationFileDeclaration.Entity (_, subDecls) -> collectDeclarations subDecls
                 | FSharpImplementationFileDeclaration.MemberOrFunctionOrValue (mfv, _, expr) ->
-                    // Check if this is a Dispose method
-                    if isDisposeMember basesOfDisposables mfv then
-                        // Walk the expression to find throw calls
-                        findThrowCalls expr violations
-                    else
-                        // For non-Dispose methods, check for object expressions implementing IDisposable
-                        findObjectExpressions expr violations
-                | FSharpImplementationFileDeclaration.InitAction expr ->
-                    // Check for object expressions in init actions too
-                    findObjectExpressions expr violations
+                    memberDecls.Add (mfv, expr)
+                | FSharpImplementationFileDeclaration.InitAction expr -> initActions.Add expr
             )
 
-        walkDeclarations typedTree.Declarations
+        collectDeclarations typedTree.Declarations
+
+        // Disposal is often delegated to a member that local evidence alone does not
+        // identify as disposal: a helper inherited from a non-disposable base class, or a
+        // public `Dispose ()` whose always-throwing body was generalised to a generic return
+        // type. Trace Dispose-named calls transitively from every locally-identified
+        // disposal member; anything reached is part of a disposal path. (A disposable type
+        // declared in a *different* file delegating to a helper in this one will not be seen
+        // here; that false negative is inherent to per-file analysis.)
+        let delegatedDisposal : System.Collections.Generic.HashSet<string> =
+            let disposeDeclsByKey =
+                memberDecls
+                |> Seq.filter (fun (mfv, _) -> mfv.CompiledName = "Dispose")
+                |> Seq.choose (fun (mfv, expr) -> memberKey mfv |> Option.map (fun key -> key, expr))
+                |> Seq.groupBy fst
+                |> Seq.map (fun (key, decls) -> key, decls |> Seq.map snd |> List.ofSeq)
+                |> Map.ofSeq
+
+            let reached = System.Collections.Generic.HashSet<string> ()
+            let queue = System.Collections.Generic.Queue<FSharpExpr> ()
+
+            memberDecls
+            |> Seq.filter (fst >> isDisposeMember)
+            |> Seq.iter (snd >> queue.Enqueue)
+
+            while queue.Count > 0 do
+                let body = queue.Dequeue ()
+                let callees = ResizeArray<FSharpMemberOrFunctionOrValue> ()
+                findDisposeCallees body callees
+
+                for callee in callees do
+                    match memberKey callee with
+                    | Some key when reached.Add key ->
+                        match Map.tryFind key disposeDeclsByKey with
+                        | Some bodies -> bodies |> List.iter queue.Enqueue
+                        | None -> ()
+                    | _ -> ()
+
+            reached
+
+        let isDisposal (mfv : FSharpMemberOrFunctionOrValue) =
+            isDisposeMember mfv
+            || (mfv.CompiledName = "Dispose"
+                && (
+                    match memberKey mfv with
+                    | Some key -> delegatedDisposal.Contains key
+                    | None -> false
+                ))
+
+        memberDecls
+        |> Seq.iter (fun (mfv, expr) ->
+            // Check if this is a Dispose method
+            if isDisposal mfv then
+                // Walk the expression to find throw calls
+                findThrowCalls expr violations
+            else
+                // For non-Dispose methods, check for object expressions implementing IDisposable
+                findObjectExpressions expr violations
+        )
+
+        // Check for object expressions in init actions too
+        initActions |> Seq.iter (fun expr -> findObjectExpressions expr violations)
 
         violations
         |> Seq.map (fun (range, functionName) ->
