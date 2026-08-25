@@ -1,5 +1,11 @@
 # WoofWare.FSharpAnalyzers
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="logos/dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="logos/light.svg">
+  <img alt="Project logo: minimalistic face of a cartoon Shiba Inu, drawn in outline, with one eyebrow raised sceptically and a pencil held crosswise in its mouth." src="logos/light.svg" width="300">
+</picture>
+
 A set of F# source analyzers, using the [Ionide analyzer SDK](https://github.com/ionide/FSharp.Analyzers.SDK).
 
 They are modelled on the [G-Research analyzers](https://github.com/G-Research/fsharp-analyzers/), but are much more opinionated.
