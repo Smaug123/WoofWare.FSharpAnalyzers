@@ -2,7 +2,6 @@
   <PropertyGroup>
     <DebugType Condition=" '$(DebugType)' == '' ">embedded</DebugType>
     <Deterministic>true</Deterministic>
-    <NetCoreTargetingPackRoot>[UNDEFINED]</NetCoreTargetingPackRoot>
     <DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder>
     <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
