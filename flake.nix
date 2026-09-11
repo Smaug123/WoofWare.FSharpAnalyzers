@@ -1,5 +1,5 @@
 {
-  description = "Jane Street's incremental reactive programming system Bonsai, but in F#";
+  description = "Some opinionated F# analysers";
 
   inputs = {
     flake-utils.url = "github:numtide/flake-utils";
@@ -17,8 +17,8 @@
         config.allowUnfree = true;
       };
       pname = "WoofWare.FSharpAnalyzers";
-      dotnet-sdk = pkgs.dotnetCorePackages.sdk_9_0;
-      dotnet-runtime = pkgs.dotnetCorePackages.runtime_9_0;
+      dotnet-sdk = pkgs.dotnetCorePackages.sdk_10_0;
+      dotnet-runtime = pkgs.dotnetCorePackages.runtime_10_0;
       version = "0.1";
       dotnetTool = dllOverride: toolName: toolVersion: hash:
         pkgs.stdenvNoCC.mkDerivation rec {

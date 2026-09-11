@@ -7,7 +7,7 @@ open FSharp.Analyzers.SDK.Testing
 module ProjectOptions =
 
     [<Literal>]
-    let FRAMEWORK = "net9.0"
+    let FRAMEWORK = "net10.0"
 
     // mkOptionsFromProject appears to be unsafe to run multiple times in parallel
     let get =
