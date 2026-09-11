@@ -187,6 +187,9 @@ This analyzer highlights those non-terminal `return` calls so you can restructur
 Bans raising all exceptions in a `Dispose` implementation that would escape a `try/with`.
 That includes conditional `with` blocks and `reraise`, as well as exception handlers which themselves throw.
 
+A member counts as a `Dispose` implementation if it implements `IDisposable.Dispose` (including in object expressions), is a disposal-shaped `Dispose` member (`Dispose ()` or `Dispose (disposing : bool)`) of a type implementing `IDisposable`, or is a member named `Dispose` that a disposal method — including a finalizer — (transitively) calls, directly or as an implementation of the virtual slot being called.
+Whether the specific call site could really dispatch to a given implementation is deliberately not modelled: a throwing implementation of a disposal slot is flagged even if the disposal paths in the same file happen not to reach it, since a caller in another file might.
+
 Use the [suppression comment](https://github.com/ionide/FSharp.Analyzers.SDK/blob/6450c35794c5fa79c03164f15b292598cdfc8890/docs/content/getting-started/Ignore%20Analyzer%20Hits.md) "fsharpanalyzer: ignore-line WOOF-THROWING-DISPOSE" to suppress the analyzer.
 
 ### Rationale
