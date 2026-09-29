@@ -21,13 +21,13 @@
   },
   {
     "pname": "FSharp.Analyzers.SDK",
-    "version": "0.39.0",
-    "hash": "sha256-9NKtIAz80bJ3UzbZcVq3mQKTVtebpXYnnwDuUemV45A="
+    "version": "0.39.2",
+    "hash": "sha256-lhu5lt7EZx/LXk2f6Sw2Vm8LPDP98DM+ebEeW8k5iNM="
   },
   {
     "pname": "FSharp.Analyzers.SDK.Testing",
-    "version": "0.39.0",
-    "hash": "sha256-wcfMjmcqTfVq+AAmQfV0y3TfU5bmjncA7ho4adx6vUY="
+    "version": "0.39.2",
+    "hash": "sha256-l2fK6Ls0KLNsQbqPW6I6ZDG8zGyANqF9FGGxyau5Dfg="
   },
   {
     "pname": "FSharp.Compiler.Service",
@@ -86,8 +86,8 @@
   },
   {
     "pname": "Microsoft.CodeCoverage",
-    "version": "18.10.0",
-    "hash": "sha256-CruHCbs9PzO3m2/lyhjZbjDfMVNcO99bdMohchvvhI4="
+    "version": "18.10.1",
+    "hash": "sha256-j6kLSrn2sJA6sUf+tcDAfwI9maDTjU5+xZl7qd+5pEA="
   },
   {
     "pname": "Microsoft.Extensions.Configuration",
@@ -171,8 +171,8 @@
   },
   {
     "pname": "Microsoft.NET.Test.Sdk",
-    "version": "18.10.0",
-    "hash": "sha256-BAdT4MCcuW/lgVokaiDKk+V2b6w+/l3bMfKEsWLhXvU="
+    "version": "18.10.1",
+    "hash": "sha256-12rO5bWnSE7xdrZg4zgRxu8/M4vUdR46ov0xiz2y/P4="
   },
   {
     "pname": "Microsoft.Testing.Extensions.Telemetry",
@@ -201,8 +201,8 @@
   },
   {
     "pname": "Microsoft.TestPlatform.ObjectModel",
-    "version": "18.10.0",
-    "hash": "sha256-ftoPwkiJ+AUG0G8t3VtUwhNLEUP7+mQAoykw0QFPEJw="
+    "version": "18.10.1",
+    "hash": "sha256-rtEsNPmOjjL1VCi6CRCLROMsbIia6sv6rGYciKUkbW8="
   },
   {
     "pname": "Microsoft.TestPlatform.ObjectModel",
@@ -211,8 +211,8 @@
   },
   {
     "pname": "Microsoft.TestPlatform.TestHost",
-    "version": "18.10.0",
-    "hash": "sha256-RBdFb7uMIgpK3Omt4zf8nBSBMmafSNjtoK2BRDwvLkY="
+    "version": "18.10.1",
+    "hash": "sha256-1lLjkHDqSCMGjopGg0KwaNnztQrh/aP7V7E+ydtkgiw="
   },
   {
     "pname": "Microsoft.Win32.SystemEvents",
@@ -226,8 +226,8 @@
   },
   {
     "pname": "Nerdbank.GitVersioning",
-    "version": "3.8.118",
-    "hash": "sha256-Hmyy0ZKOmwN4zIhI4+MqoN8geZNc1sd033aZJ6APrO8="
+    "version": "3.10.94",
+    "hash": "sha256-pW3ekhn5oHQ7uh9m+MTb825abo27Isvo61yO+7wUS24="
   },
   {
     "pname": "NUnit",
